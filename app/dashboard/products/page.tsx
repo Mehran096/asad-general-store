@@ -338,9 +338,18 @@ export default function ProductsPage() {
       {pendingCount > 0 && !isOffline && <div className="mb-3 bg-blue-50 border border-blue-200 text-blue-800 text-[12px] p-2.5 rounded-xl flex justify-between"><span>{pendingCount} pending sync</span><button onClick={() => syncPendingProducts()} disabled={syncing} className="bg-blue-600 text-white px-3 py-1 rounded-lg text-[11px]">{syncing ? "Syncing..." : "Sync Now"}</button></div>}
       <div className="flex flex-col gap-3 mb-4">
         <h1 className="text-[20px] font-bold">📱 Asad Mobile & Manyari - Stock</h1>
-        <div className="flex gap-2">
-          <input placeholder="🔍 Search product..." value={search} onChange={(e) => handleSearchChange(e.target.value)} className="border p-2.5 rounded-xl flex-1 sm:w-72 bg-white text-[14px]" />
-          <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }} className="border p-2.5 rounded-xl bg-white text-[13px]">
+        <div className="flex gap-1.5 sm:gap-2">
+          <input 
+            placeholder="🔍 Search product..." 
+            value={search} 
+            onChange={(e) => handleSearchChange(e.target.value)} 
+            className="border p-2 sm:p-2.5 rounded-lg sm:rounded-xl flex-1 min-w-0 bg-white text-[12px] sm:text-[14px] h-8 sm:h-auto" 
+          />
+          <select 
+            value={categoryFilter} 
+            onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }} 
+            className="border p-2 sm:p-2.5 rounded-lg sm:rounded-xl bg-white text-[11px] sm:text-[13px] h-8 sm:h-auto shrink-0 max-w-27.5 sm:max-w-none"
+          >
             <option value="all">All</option>
             <option value="mobile_accessories">📱 Mobile</option>
             <option value="manyari">💍 Manyari</option>

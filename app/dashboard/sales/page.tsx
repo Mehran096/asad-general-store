@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useCallback, useSyncExternalStore, useRef } from "react";
 import { offlineDB } from "@/lib/offline-db";
-import type { OfflineSale } from "@/lib/offline-db";
+import type { OfflineSale, OfflineProduct } from "@/lib/offline-db";
 import { getOfflineUser } from "@/lib/offline-auth";
 
 type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other";
@@ -11,9 +11,16 @@ type CartItem = { cartId: string; productId: string; name: string; qty: number; 
 type FilterType = "today"|"weekly"|"monthly"|"all";
 type Pagination = { page: number; totalPages: number; hasMore: boolean; totalCount: number };
 type SalesApiResponse = { sales: Sale[]; pagination: Pagination };
-type ProductApiResponse = { products: Product[] } | Product[];
+type ProductApiResponse = { products: Product[]; pagination?: Pagination } | Product[];
+type OfflineUser = { _id?: string; id?: string } | null;
+type SessionRes = { user?: { id?: string; _id?: string } };
 
-function useIsOnline(){ const s=useCallback((cb:()=>void)=>{window.addEventListener("online",cb);window.addEventListener("offline",cb);return()=>{window.removeEventListener("online",cb);window.removeEventListener("offline",cb);};},[]); const g=useCallback(()=>navigator.onLine,[]); const ss=useCallback(()=>true,[]); return useSyncExternalStore(s,g,ss); }
+function useIsOnline(){
+  const sub = useCallback((cb:()=>void)=>{ window.addEventListener("online",cb); window.addEventListener("offline",cb); return ()=>{ window.removeEventListener("online",cb); window.removeEventListener("offline",cb);};},[]);
+  const snap = useCallback(()=> navigator.onLine,[]);
+  const ss = useCallback(()=> true,[]);
+  return useSyncExternalStore(sub,snap,ss);
+}
 function rnd(n:number){return Math.round(n||0);}
 function fmt(n:number){return rnd(n).toString();}
 
@@ -25,8 +32,11 @@ export default function SalesPage(){
   const [filter, setFilter] = useState<FilterType>("today");
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState<Pagination>({page:1,totalPages:1,hasMore:false,totalCount:0});
+  const [productPage, setProductPage] = useState(1);
+  const [productPagination, setProductPagination] = useState<Pagination>({page:1,totalPages:1,hasMore:false,totalCount:0});
   const [productSearch, setProductSearch] = useState("");
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
   const [loadingSales, setLoadingSales] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [customerName, setCustomerName] = useState("Walk-in");
@@ -40,8 +50,8 @@ export default function SalesPage(){
   const customerInputRef = useRef<HTMLInputElement>(null);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(()=>{setMounted(true);},[]);
-  const refreshCounts = useCallback(async()=>{ try{ const c=await offlineDB.sales.where("synced").equals(0).count(); setPendingCount(c);}catch{} },[]);
+  useEffect(()=>{ setMounted(true); },[]);
+  const refreshCounts = useCallback(async()=>{ try{ const c=await offlineDB.sales.where("synced").equals(0).count(); setPendingCount(c);}catch{ /* ignore */ } },[]);
 
   const syncPendingSales = useCallback(async()=>{
     try{
@@ -50,44 +60,80 @@ export default function SalesPage(){
       if(pending.length===0){ await refreshCounts(); return; }
       for(const s of pending){
         try{
-          const res = await fetch("/api/sales",{
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({
-              productId:s.productId, productName:s.productName, quantity:s.quantity,
-              sellPrice:s.sellPrice, buyPrice:s.buyPrice, buyPriceAvg:s.buyPriceAvg,
-              customerName:s.customerName, paymentType:s.paymentType, category:s.category,
-              userId:s.userId, localId:s.localId,
-            })
-          });
-          if(res.ok){
-            await offlineDB.sales.update(s.localId, {synced:1});
-          }
-        }catch{}
+          const res = await fetch("/api/sales",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ productId:s.productId, productName:s.productName, quantity:s.quantity, sellPrice:s.sellPrice, buyPrice:s.buyPrice, buyPriceAvg:s.buyPriceAvg, customerName:s.customerName, paymentType:s.paymentType, category:s.category, userId:s.userId, localId:s.localId, }) });
+          if(res.ok){ await offlineDB.sales.update(s.localId, {synced:1}); }
+        }catch{ /* ignore */ }
       }
       await refreshCounts();
-    }catch{}
+    }catch{ /* ignore */ }
   },[refreshCounts]);
+
+  const cacheAllProductsOnce = useCallback(async()=>{
+    try{
+      const res = await fetch(`/api/products?search=&category=all&page=1&limit=500`);
+      const data = await res.json() as ProductApiResponse;
+      const list = Array.isArray(data) ? data : data.products;
+      const offlineUser = getOfflineUser() as OfflineUser;
+      const userId = offlineUser?._id || offlineUser?.id || "offline";
+      const toCache: OfflineProduct[] = list.map((p)=>({
+        _id: p._id, localId: p._id, name: p.name, category: p.category, company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, userId, synced: 1, createdAt: new Date().toISOString(),
+      }));
+      await offlineDB.products.bulkPut(toCache);
+      alert(`Cached ${toCache.length} products for offline!`);
+    }catch{ alert("Cache failed"); }
+  },[]);
 
   useEffect(()=>{
     let cancelled=false;
     const load=async()=>{
-      setLoadingProducts(true);
+      if(productPage===1) setLoadingProducts(true);
+      else setLoadingMoreProducts(true);
       try{
         if(!navigator.onLine){
           const cached=await offlineDB.products.toArray();
-          const filtered=cached.filter(c=>{ const s=productSearch.toLowerCase(); return (!s||c.name.toLowerCase().includes(s)) && (categoryFilter==="all"||c.category===categoryFilter); });
-          if(!cancelled) setProducts(filtered.map(c=>({ _id:c._id||c.localId, name:c.name, category:c.category||"other", buyPrice:c.buyPriceAvg||c.buyPrice, buyPriceAvg:c.buyPriceAvg||c.buyPrice, sellPrice:c.sellPrice, stock:c.stock, stockMode:c.stockMode||"limited" })));
+          const filtered=cached.filter((c)=>{ 
+            const s=productSearch.toLowerCase(); 
+            return (!s||c.name.toLowerCase().includes(s)) && (categoryFilter==="all"||c.category===categoryFilter); 
+          });
+          const LIMIT = 20;
+          const paged = filtered.slice(0, productPage * LIMIT);
+          const mapped: Product[] = paged.map((c)=>({ 
+            _id:c._id||c.localId, name:c.name, category:(c.category as Category)||"other", 
+            buyPrice:c.buyPriceAvg||c.buyPrice, buyPriceAvg:c.buyPriceAvg||c.buyPrice, 
+            sellPrice:c.sellPrice, stock:c.stock, stockMode:c.stockMode||"limited" 
+          }));
+          if(!cancelled){
+            setProducts(mapped);
+            setProductPagination({ page: productPage, totalPages: Math.ceil(filtered.length / LIMIT) || 1, hasMore: filtered.length > paged.length, totalCount: filtered.length });
+          }
         } else {
-          const res=await fetch(`/api/products?search=${encodeURIComponent(productSearch)}&category=${categoryFilter}&page=1&limit=50`);
+          const res=await fetch(`/api/products?search=${encodeURIComponent(productSearch)}&category=${categoryFilter}&page=${productPage}&limit=20`);
           const data=(await res.json()) as ProductApiResponse;
-          const list=Array.isArray(data)?data:data.products;
-          if(!cancelled) setProducts(list.map(p=>({ _id:p._id, name:p.name, category:p.category, buyPrice:p.buyPriceAvg||p.buyPrice||0, buyPriceAvg:p.buyPriceAvg||p.buyPrice||0, sellPrice:p.sellPrice, stock:p.stock, stockMode:p.stockMode })));
+          let list: Product[] = [];
+          let pag: Pagination | undefined;
+          if(Array.isArray(data)){ list = data; }
+          else { list = data.products; pag = data.pagination; }
+
+          if(list.length>0){
+            const offlineUser = getOfflineUser() as OfflineUser;
+            const userId = offlineUser?._id || offlineUser?.id || "offline";
+            const toCache: OfflineProduct[] = list.map((p)=>({
+              _id: p._id, localId: p._id, name: p.name, category: p.category, company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, userId, synced: 1, createdAt: new Date().toISOString(),
+            }));
+            await offlineDB.products.bulkPut(toCache).catch(()=>{ /* ignore */ });
+          }
+
+          if(!cancelled){
+            const mappedList = list.map((p)=>({ _id:p._id, name:p.name, category:p.category, buyPrice:p.buyPriceAvg||p.buyPrice||0, buyPriceAvg:p.buyPriceAvg||p.buyPrice||0, sellPrice:p.sellPrice, stock:p.stock, stockMode:p.stockMode }));
+            if(productPage===1) setProducts(mappedList);
+            else setProducts((prev)=>[...prev, ...mappedList]);
+            if(pag) setProductPagination(pag);
+          }
         }
-      }catch{} finally{ if(!cancelled) setLoadingProducts(false); }
+      }catch{ /* ignore */ } finally{ if(!cancelled){ setLoadingProducts(false); setLoadingMoreProducts(false); } }
     };
-    void load(); return()=>{cancelled=true;};
-  },[productSearch, categoryFilter]);
+    void load(); return()=>{ cancelled=true; };
+  },[productSearch, categoryFilter, productPage]);
 
   const loadSales=useCallback(async(f:FilterType,p:number)=>{
     setLoadingSales(true);
@@ -96,20 +142,20 @@ export default function SalesPage(){
         const all=await offlineDB.sales.orderBy("createdAt").reverse().toArray();
         let filtered=all as OfflineSale[];
         const now=new Date();
-        if(f==="today") filtered=filtered.filter(s=>new Date(s.createdAt).toDateString()===now.toDateString());
-        if(f==="weekly"){ const w=new Date(); w.setDate(now.getDate()-7); filtered=filtered.filter(s=>new Date(s.createdAt)>=w); }
-        if(f==="monthly"){ const m=new Date(); m.setMonth(now.getMonth()-1); filtered=filtered.filter(s=>new Date(s.createdAt)>=m); }
-        const mapped: Sale[]=filtered.slice((p-1)*20,p*20).map(o=>({ _id:o.localId, productId:o.productId, productName:o.productName, category:o.category||"other", quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType }));
-        if(p===1) setSales(mapped); else setSales(prev=>[...prev,...mapped]);
+        if(f==="today") filtered=filtered.filter((s)=>new Date(s.createdAt).toDateString()===now.toDateString());
+        if(f==="weekly"){ const w=new Date(); w.setDate(now.getDate()-7); filtered=filtered.filter((s)=>new Date(s.createdAt)>=w); }
+        if(f==="monthly"){ const m=new Date(); m.setMonth(now.getMonth()-1); filtered=filtered.filter((s)=>new Date(s.createdAt)>=m); }
+        const mapped: Sale[]=filtered.slice((p-1)*20,p*20).map((o)=>({ _id:o.localId, productId:o.productId, productName:o.productName, category:o.category||"other", quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType }));
+        if(p===1) setSales(mapped); else setSales((prev)=>[...prev,...mapped]);
         setPagination({page:p,totalPages:Math.ceil(filtered.length/20),hasMore:filtered.length>p*20,totalCount:filtered.length});
       } else {
         const res=await fetch(`/api/sales?filter=${f}&page=${p}&limit=20`);
         const data=(await res.json()) as SalesApiResponse;
         const list=data.sales||[];
-        if(p===1) setSales(list); else setSales(prev=>[...prev,...list]);
+        if(p===1) setSales(list); else setSales((prev)=>[...prev,...list]);
         setPagination(data.pagination||{page:p,totalPages:1,hasMore:false,totalCount:list.length});
       }
-    }catch{} finally{ setLoadingSales(false); }
+    }catch{ /* ignore */ } finally{ setLoadingSales(false); }
   },[]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -118,16 +164,10 @@ export default function SalesPage(){
   const total=sales.reduce((a,b)=>a+b.total,0);
   const profit=sales.reduce((a,b)=>a+b.profit,0);
 
-  const updateProductPrice = (id:string, newPrice:number)=>{
-    if(newPrice<1) return;
-    setProducts(prev=>prev.map(p=>p._id===id?{...p, sellPrice:rnd(newPrice)}:p));
-  };
+  const updateProductPrice = (id:string, newPrice:number)=>{ if(newPrice<1) return; setProducts((prev)=>prev.map((p)=>p._id===id?{...p, sellPrice:rnd(newPrice)}:p)); };
 
   const addToCart=useCallback((p:Product, qty=1)=>{
-    if(p.stockMode==="limited" && p.stock<=0){
-      alert(`Out of stock: ${p.name} - Stock 0`);
-      return;
-    }
+    if(p.stockMode==="limited" && p.stock<=0){ alert(`Out of stock: ${p.name} - Stock 0`); return; }
     if(paymentType==="credit"){
       const name=customerName.trim();
       if(name.length<2 || name.toLowerCase()==="walk-in"){
@@ -138,8 +178,8 @@ export default function SalesPage(){
         return;
       }
     }
-    setCart(prev=>{
-      const totalQtyInCart = prev.filter(c=>c.productId===p._id).reduce((s,c)=>s+c.qty,0);
+    setCart((prev)=>{
+      const totalQtyInCart = prev.filter((c)=>c.productId===p._id).reduce((s,c)=>s+c.qty,0);
       if(p.stockMode==="limited" && p.stock < totalQtyInCart + qty){
         alert(`Only ${p.stock} left for ${p.name}, you have ${totalQtyInCart} in cart. Can add max ${Math.max(0,p.stock-totalQtyInCart)} more`);
         return prev;
@@ -159,7 +199,7 @@ export default function SalesPage(){
     });
   },[paymentType, customerName]);
 
-  const removeFromCart=(cartId:string)=>setCart(prev=>prev.filter(c=>c.cartId!==cartId));
+  const removeFromCart=(cartId:string)=>setCart((prev)=>prev.filter((c)=>c.cartId!==cartId));
   const cartTotal=cart.reduce((s,c)=>s+c.total,0);
   const cartProfit=cart.reduce((s,c)=>s+rnd((c.price-c.buyPriceAvg)*c.qty),0);
 
@@ -177,8 +217,6 @@ export default function SalesPage(){
     const finalCustomer=customerName.trim()||"Walk-in";
     const copy=[...cart];
     const now=new Date().toISOString();
-
-    type SessionRes = { user?: { id?: string; _id?: string } };
     let sessionUserId = "";
     try {
       const res = await fetch("/api/auth/session");
@@ -186,8 +224,8 @@ export default function SalesPage(){
         const data = await res.json() as SessionRes;
         sessionUserId = data?.user?.id || data?.user?._id || "";
       }
-    } catch {}
-    const offlineUser = getOfflineUser() as { _id?: string; id?: string } | null;
+    } catch{ /* ignore */ }
+    const offlineUser = getOfflineUser() as OfflineUser;
     const rawUserId = offlineUser?._id || offlineUser?.id || sessionUserId || "offline_user";
     
     const newSales: Sale[]=copy.map((c,i)=>({
@@ -205,7 +243,7 @@ export default function SalesPage(){
       paymentType,
     }));
     
-    setSales(prev=>[...newSales, ...prev]);
+    setSales((prev)=>[...newSales, ...prev]);
     setCart([]);
 
     for(let i=0;i<copy.length;i++){
@@ -228,7 +266,7 @@ export default function SalesPage(){
         createdAt: now,
         synced: 0,
       };
-      try{ await offlineDB.sales.put(saleToSave); }catch(e){ console.error(e); }
+      try{ await offlineDB.sales.put(saleToSave); }catch{ /* ignore */ }
     }
     await refreshCounts();
 
@@ -247,17 +285,17 @@ export default function SalesPage(){
             }) 
           });
           if(res.ok){
-            try{ await offlineDB.sales.update(newSales[i]._id, {synced:1}); }catch{}
+            try{ await offlineDB.sales.update(newSales[i]._id, {synced:1}); }catch{ /* ignore */ }
           } else {
             const text = await res.text();
             alert(`Mongo ${res.status}: ${text}`);
           }
-        }catch(e){ console.error(e); }
+        }catch{ /* ignore */ }
       }
       await refreshCounts();
     }
-    setProducts(prev=>prev.map(prod=>{
-      const totalQty = copy.filter(x=>x.productId===prod._id).reduce((s,x)=>s+x.qty,0);
+    setProducts((prev)=>prev.map((prod)=>{
+      const totalQty = copy.filter((x)=>x.productId===prod._id).reduce((s,x)=>s+x.qty,0);
       return totalQty>0 && prod.stockMode==="limited" ? {...prod, stock:Math.max(0,prod.stock-totalQty)} : prod;
     }));
   },[cart, customerName, paymentType, refreshCounts]);
@@ -275,15 +313,20 @@ export default function SalesPage(){
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <div className="lg:col-span-2">
           <div className="flex gap-2 mb-2">
-            <input ref={searchRef} value={productSearch} onChange={e=>setProductSearch(e.target.value)} placeholder="🔍 Search e.g Vivo Cover" className="flex-1 border p-2.5 rounded-xl bg-white text-[13px]" />
-            <select value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
+            <input ref={searchRef} value={productSearch} onChange={(e)=>{setProductSearch(e.target.value); setProductPage(1);}} placeholder="🔍 Search e.g Vivo Cover" className="flex-1 border p-2.5 rounded-xl bg-white text-[13px]" />
+            <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
+          </div>
+          <div className="flex justify-between items-center mb-2">
+            <p className="text-[10px] text-gray-500">Showing {products.length}/{productPagination.totalCount} products</p>
+            {!isOffline && <button onClick={()=>void cacheAllProductsOnce()} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg">Cache All for Offline</button>}
           </div>
           {loadingProducts? <p className="text-center py-6 text-[12px]">Loading...</p> : (
+            <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {products.map(p=>{
+              {products.map((p)=>{
                 const qty=qtyMap[p._id]||1; const buy=p.buyPriceAvg||p.buyPrice;
                 const isOutOfStock = p.stockMode==="limited" && p.stock<=0;
-                const cartQty = cart.filter(c=>c.productId===p._id).reduce((s,c)=>s+c.qty,0);
+                const cartQty = cart.filter((c)=>c.productId===p._id).reduce((s,c)=>s+c.qty,0);
                 const remaining = p.stockMode==="limited" ? Math.max(0, p.stock - cartQty) : 999;
                 return(
                   <div key={p._id} className={`bg-white border rounded-xl p-3 ${isOutOfStock ? "opacity-70 bg-red-50 border-red-200" : ""}`}>
@@ -291,7 +334,7 @@ export default function SalesPage(){
                     <p className="text-[11px] text-gray-500">{p.category} • Stock {p.stockMode==="unlimited"?"∞":p.stock} {!isOutOfStock && p.stockMode==="limited" ? `(Left ${remaining})` : ""} • Buy {fmt(buy)}</p>
                     <div className="flex gap-2 mt-2 items-center">
                       <span className="text-[11px]">Sell Rs.</span>
-                      <input type="number" value={p.sellPrice} onChange={e=>updateProductPrice(p._id, Number(e.target.value))} className="w-20 border p-1 rounded-lg text-[12px] font-bold bg-yellow-50" disabled={isOutOfStock} />
+                      <input type="number" value={p.sellPrice} onChange={(e)=>updateProductPrice(p._id, Number(e.target.value))} className="w-20 border p-1 rounded-lg text-[12px] font-bold bg-yellow-50" disabled={isOutOfStock} />
                       <span className="text-[10px] text-green-600 font-bold ml-auto">Profit {fmt(p.sellPrice-buy)}</span>
                     </div>
                     <div className="flex gap-2 mt-2">
@@ -306,20 +349,27 @@ export default function SalesPage(){
                 );
               })}
             </div>
+            {productPagination.hasMore && (
+              <button type="button" onClick={()=>setProductPage((pr)=>pr+1)} disabled={loadingMoreProducts} className="w-full mt-3 py-2.5 bg-white border border-gray-300 rounded-xl text-[13px] font-bold shadow-sm hover:bg-gray-50">
+                {loadingMoreProducts ? "Loading..." : `Load More Products (${productPagination.totalCount - products.length} remaining)`}
+              </button>
+            )}
+            {products.length===0 && !loadingProducts && <p className="text-center py-10 text-[12px] text-gray-400">No cached products. Go online and click Cache All for Offline.</p>}
+            </>
           )}
         </div>
         <div className="space-y-3">
           <div className="bg-white border rounded-xl p-3">
             <p className="font-bold text-[13px] mb-2">🛒 Cart ({cart.length}) - Rs.{fmt(cartTotal)}</p>
             <div className="space-y-1 max-h-60 overflow-y-auto mb-3">
-              {cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Cart empty</p> : cart.map(c=>(
+              {cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Cart empty</p> : cart.map((c)=>(
                 <div key={c.cartId} className="flex justify-between text-[11px] border-b py-1.5">
                   <span>{c.name} x{c.qty} @ {fmt(c.price)}</span>
                   <span className="flex gap-2"><b>Rs.{fmt(c.total)}</b><button type="button" onClick={()=>removeFromCart(c.cartId)} className="text-red-600">✕</button></span>
                 </div>
               ))}
             </div>
-            <input ref={customerInputRef} value={customerName} onChange={e=>{ setCustomerName(e.target.value); if(e.target.value.trim().length>=2) setCustomerError(false); }} placeholder="Customer name for Udhar" className={`w-full border p-2 rounded-lg text-[12px] mb-2 ${customerError ? "border-red-500 bg-red-50 ring-2 ring-red-300" : ""}`} />
+            <input ref={customerInputRef} value={customerName} onChange={(e)=>{ setCustomerName(e.target.value); if(e.target.value.trim().length>=2) setCustomerError(false); }} placeholder="Customer name for Udhar" className={`w-full border p-2 rounded-lg text-[12px] mb-2 ${customerError ? "border-red-500 bg-red-50 ring-2 ring-red-300" : ""}`} />
             {customerError && <p className="text-[10px] text-red-600 mb-2 font-bold">* Customer name required for Udhar</p>}
             <div className="flex bg-gray-100 rounded-lg p-1 mb-3">
               <button type="button" onClick={()=>{ setPaymentType("cash"); setCustomerError(false); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="cash"?"bg-green-600 text-white":"text-gray-600"}`}>Cash</button>
@@ -329,13 +379,13 @@ export default function SalesPage(){
             {pendingCount>0 && <button type="button" onClick={()=>void syncPendingSales()} className="w-full mt-2 bg-amber-500 text-white py-2 rounded-xl font-bold text-[11px]">Sync {pendingCount} Pending Now</button>}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
-            <div className="flex gap-1 p-2 border-b bg-gray-50 overflow-x-auto">{(["today","weekly","monthly","all"] as const).map(f=><button type="button" key={f} onClick={()=>{setFilter(f); setPage(1);}} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-green-600 text-white":"bg-white border"}`}>{f}</button>)}</div>
-            {loadingSales? <p className="p-4 text-center text-[11px]">Loading sales...</p> : <div>{sales.map(s=>(
+            <div className="flex gap-1 p-2 border-b bg-gray-50 overflow-x-auto">{(["today","weekly","monthly","all"] as const).map((f)=><button type="button" key={f} onClick={()=>{setFilter(f); setPage(1);}} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-green-600 text-white":"bg-white border"}`}>{f}</button>)}</div>
+            {loadingSales? <p className="p-4 text-center text-[11px]">Loading sales...</p> : <div>{sales.map((s)=>(
               <div key={s._id} className={`p-2 border-b flex justify-between text-[11px] ${s.status==="pending"?"bg-red-50":""}`}>
                 <div><b>{s.productName}</b> x{s.quantity} @ Rs.{fmt(s.sellPrice)}{s.customerName && s.customerName!=="Walk-in"?` 👤${s.customerName}`:""}<div className="text-[9px] text-gray-500">{new Date(s.createdAt).toLocaleTimeString()} • Profit {fmt(s.profit)}</div></div>
                 <div className="text-right"><div className="font-bold">Rs.{fmt(s.total)}</div><div className={`text-[9px] ${s.status==="pending"?"text-red-600":"text-green-600"}`}>{s.status==="pending"?"UDHAR":"Paid"}</div></div>
               </div>
-            ))}{pagination.hasMore && <button type="button" onClick={()=>setPage(p=>p+1)} className="w-full py-2 text-[11px] bg-gray-50">Load More</button>}</div>}
+            ))}{pagination.hasMore && <button type="button" onClick={()=>setPage((p)=>p+1)} className="w-full py-2 text-[11px] bg-gray-50">Load More</button>}</div>}
           </div>
         </div>
       </div>
