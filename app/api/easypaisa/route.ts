@@ -17,17 +17,23 @@ type EasyBody = {
   localId?: string;
 };
 
-function rnd(n: number) { return Math.round(n || 0); }
+const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+function rnd(n: number): number { return Math.round(n || 0); }
 
-function getDateRange(filter: string) {
+function getPKTRange(filter: string): { start?: Date; end?: Date } {
+  if (filter === "all") return {};
   const now = new Date();
-  const start = new Date(now);
-  if (filter === "today") start.setHours(0,0,0,0);
-  else if (filter === "weekly") { start.setDate(now.getDate()-7); start.setHours(0,0,0,0); }
-  else if (filter === "monthly") { start.setDate(1); start.setHours(0,0,0,0); }
-  else if (filter === "yearly") { start.setMonth(0,1); start.setHours(0,0,0,0); }
-  else { start.setFullYear(2000); }
-  return { start, end: new Date() };
+  const nowPKT = new Date(now.getTime() + PKT_OFFSET_MS);
+  const y = nowPKT.getUTCFullYear();
+  const m = nowPKT.getUTCMonth();
+  const d = nowPKT.getUTCDate();
+  const startToday = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - PKT_OFFSET_MS);
+  const endToday = new Date(Date.UTC(y, m, d + 1, 0, 0, 0, 0) - PKT_OFFSET_MS);
+  if (filter === "today") return { start: startToday, end: endToday };
+  if (filter === "weekly") return { start: new Date(startToday.getTime() - 7 * 24 * 60 * 60 * 1000), end: endToday };
+  if (filter === "monthly") return { start: new Date(Date.UTC(y, m, 1, 0, 0, 0, 0) - PKT_OFFSET_MS), end: endToday };
+  if (filter === "yearly") return { start: new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0) - PKT_OFFSET_MS), end: endToday };
+  return {};
 }
 
 export async function GET(req: NextRequest) {
@@ -35,7 +41,7 @@ export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     await dbConnect();
-    
+
     const sp = req.nextUrl.searchParams;
     const filter = sp.get("filter") || "today";
     const type = sp.get("type") || "";
@@ -43,33 +49,38 @@ export async function GET(req: NextRequest) {
     const page = Math.max(1, parseInt(sp.get("page") || "1", 10));
     const limit = Math.min(100, parseInt(sp.get("limit") || "50", 10));
     const skip = (page - 1) * limit;
-    const userId = new Types.ObjectId(session.user.id);
 
-    const dateCond = filter !== "all" ? (()=>{ const {start,end}=getDateRange(filter); return { $gte: start, $lte: end }; })() : undefined;
-    const searchCond = search ? [{ customerName: { $regex: search, $options: "i" } }, { phone: { $regex: search, $options: "i" } }] : undefined;
+    const userIdObj = new Types.ObjectId(session.user.id);
+    const { start, end } = getPKTRange(filter);
 
-    // Build without custom type - use spread so TS infers optional
-    const matchDoc = {
-      userId,
-      ...(dateCond ? { createdAt: dateCond } : {}),
-      ...(type && type !== "all" ? { type } : {}),
-      ...(searchCond ? { $or: searchCond } : {}),
-    };
+    // Use Record<string, unknown> — Mongoose accepts this, no Overload error
+    const filterQuery: Record<string, unknown> = { userId: userIdObj };
+    if (start && end) filterQuery.createdAt = { $gte: start, $lt: end };
+    if (type && type !== "all") filterQuery.type = type;
+    if (search) {
+      filterQuery.$or = [
+        { customerName: { $regex: search, $options: "i" } },
+        { phone: { $regex: search, $options: "i" } },
+      ];
+    }
 
-    // Mongoose strict type fails on optional spread - cast with never (not any, passes eslint)
     const [records, totalCount, agg] = await Promise.all([
-      Easypaisa.find(matchDoc as never).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Easypaisa.countDocuments(matchDoc as never),
-      Easypaisa.aggregate([{ $match: matchDoc as never }, { $group: { _id: null, totalAmount: { $sum: "$amount" }, totalCommission: { $sum: "$commission" } } }])
+      Easypaisa.find(filterQuery).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Easypaisa.countDocuments(filterQuery),
+      Easypaisa.aggregate([
+        { $match: filterQuery },
+        { $group: { _id: null, totalAmount: { $sum: "$amount" }, totalCommission: { $sum: "$commission" } } },
+      ]),
     ]);
 
     const first = agg[0] as { totalAmount?: number; totalCommission?: number } | undefined;
-
     return NextResponse.json({
       easypaisa: records,
+      transactions: records,
       totalAmount: rnd(first?.totalAmount || 0),
       totalCommission: rnd(first?.totalCommission || 0),
-      pagination: { page, limit, totalCount, totalPages: Math.ceil(totalCount/limit), hasMore: totalCount > page*limit }
+      totalCount,
+      pagination: { page, limit, totalCount, totalPages: Math.ceil(totalCount / limit), hasMore: totalCount > page * limit },
     });
   } catch (e) {
     console.error("GET /api/easypaisa error:", e);
@@ -86,7 +97,6 @@ export async function POST(req: NextRequest) {
     if (!body.type || body.amount === undefined) return NextResponse.json({ error: "type and amount required" }, { status: 400 });
 
     const userId = new Types.ObjectId(session.user.id);
-
     if (body.localId) {
       const exists = await Easypaisa.findOne({ localId: body.localId, userId }).lean();
       if (exists) return NextResponse.json(exists, { status: 200 });
@@ -103,7 +113,7 @@ export async function POST(req: NextRequest) {
       commission,
       totalAmount: rnd(amount + commission),
       userId,
-      localId: body.localId || `easy_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+      localId: body.localId || `easy_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     });
 
     return NextResponse.json(record, { status: 201 });

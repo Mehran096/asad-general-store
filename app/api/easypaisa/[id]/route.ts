@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 
 type Params = { params: Promise<{ id: string }> };
 
-function isValidObjectId(id: string) {
+function isValidObjectId(id: string): boolean {
   return Types.ObjectId.isValid(id);
 }
 
@@ -20,10 +20,14 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!session?.user?.id || !isValidObjectId(session.user.id)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     await dbConnect();
-    const record = await Easypaisa.findOne({ _id: id, userId: session.user.id }).lean();
+    const userId = new Types.ObjectId(session.user.id);
+    
+    const record = await Easypaisa.findOne({ _id: id, userId }).lean();
     if (!record) return NextResponse.json({ error: "Record not found" }, { status: 404 });
 
     return NextResponse.json(record);
@@ -37,17 +41,19 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   const { id } = await params;
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!session?.user?.id || !isValidObjectId(session.user.id)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     await dbConnect();
     const userId = new Types.ObjectId(session.user.id);
 
     let doc = null;
     if (isValidObjectId(id)) {
-      doc = await Easypaisa.findOne({ _id: id, userId });
+      doc = await Easypaisa.findOne({ _id: id, userId }).lean();
     }
     if (!doc) {
-      doc = await Easypaisa.findOne({ localId: id, userId });
+      doc = await Easypaisa.findOne({ localId: id, userId }).lean();
     }
     if (!doc) return NextResponse.json({ error: "Record not found" }, { status: 404 });
 

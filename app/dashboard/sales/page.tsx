@@ -43,6 +43,32 @@ export default function SalesPage(){
   useEffect(()=>{setMounted(true);},[]);
   const refreshCounts = useCallback(async()=>{ try{ const c=await offlineDB.sales.where("synced").equals(0).count(); setPendingCount(c);}catch{} },[]);
 
+  const syncPendingSales = useCallback(async()=>{
+    try{
+      if(!navigator.onLine) return;
+      const pending = await offlineDB.sales.where("synced").equals(0).toArray();
+      if(pending.length===0){ await refreshCounts(); return; }
+      for(const s of pending){
+        try{
+          const res = await fetch("/api/sales",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({
+              productId:s.productId, productName:s.productName, quantity:s.quantity,
+              sellPrice:s.sellPrice, buyPrice:s.buyPrice, buyPriceAvg:s.buyPriceAvg,
+              customerName:s.customerName, paymentType:s.paymentType, category:s.category,
+              userId:s.userId, localId:s.localId,
+            })
+          });
+          if(res.ok){
+            await offlineDB.sales.update(s.localId, {synced:1});
+          }
+        }catch{}
+      }
+      await refreshCounts();
+    }catch{}
+  },[refreshCounts]);
+
   useEffect(()=>{
     let cancelled=false;
     const load=async()=>{
@@ -87,7 +113,7 @@ export default function SalesPage(){
   },[]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(()=>{ void loadSales(filter,page); void refreshCounts(); },[filter,page,loadSales,refreshCounts]);
+  useEffect(()=>{ void loadSales(filter,page); void refreshCounts(); void syncPendingSales(); },[filter,page,loadSales,refreshCounts,syncPendingSales]);
 
   const total=sales.reduce((a,b)=>a+b.total,0);
   const profit=sales.reduce((a,b)=>a+b.profit,0);
@@ -98,12 +124,10 @@ export default function SalesPage(){
   };
 
   const addToCart=useCallback((p:Product, qty=1)=>{
-    // STOCK 0 BLOCK - FIRST
     if(p.stockMode==="limited" && p.stock<=0){
       alert(`Out of stock: ${p.name} - Stock 0`);
       return;
     }
-    // UDHAR BLOCK
     if(paymentType==="credit"){
       const name=customerName.trim();
       if(name.length<2 || name.toLowerCase()==="walk-in"){
@@ -222,10 +246,15 @@ export default function SalesPage(){
               userId: sessionUserId || rawUserId, localId: newSales[i]._id,
             }) 
           });
-          const text = await res.text();
-          if(!res.ok) alert(`Mongo ${res.status}: ${text}`);
+          if(res.ok){
+            try{ await offlineDB.sales.update(newSales[i]._id, {synced:1}); }catch{}
+          } else {
+            const text = await res.text();
+            alert(`Mongo ${res.status}: ${text}`);
+          }
         }catch(e){ console.error(e); }
       }
+      await refreshCounts();
     }
     setProducts(prev=>prev.map(prod=>{
       const totalQty = copy.filter(x=>x.productId===prod._id).reduce((s,x)=>s+x.qty,0);
@@ -297,6 +326,7 @@ export default function SalesPage(){
               <button type="button" onClick={()=>{ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in"){ setCustomerError(true); alert("Customer name required for Udhar! Enter name before selecting Udhar."); customerInputRef.current?.focus(); return; } setCustomerError(false); setPaymentType("credit"); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="credit"?"bg-red-600 text-white":"text-gray-600"}`}>Udhar</button>
             </div>
             <button type="button" onClick={()=>{ void checkout(); }} disabled={cart.length===0} className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px] disabled:bg-gray-300">{paymentType==="credit"? `Udhar Rs.${fmt(cartTotal)}` : `Sell Rs.${fmt(cartTotal)} • Profit ${fmt(cartProfit)}`}</button>
+            {pendingCount>0 && <button type="button" onClick={()=>void syncPendingSales()} className="w-full mt-2 bg-amber-500 text-white py-2 rounded-xl font-bold text-[11px]">Sync {pendingCount} Pending Now</button>}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="flex gap-1 p-2 border-b bg-gray-50 overflow-x-auto">{(["today","weekly","monthly","all"] as const).map(f=><button type="button" key={f} onClick={()=>{setFilter(f); setPage(1);}} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-green-600 text-white":"bg-white border"}`}>{f}</button>)}</div>

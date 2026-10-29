@@ -130,8 +130,16 @@ export class OfflineDB extends Dexie {
       syncQueue: "++id, type, localId, createdAt",
     });
 
-    // VERSION 5 — FIX for offline not saving + grouping
     this.version(5).stores({
+      products: "localId, _id, userId, synced, name, category, createdAt",
+      sales: "localId, _id, productId, userId, synced, createdAt, customerName, status, category, paymentType",
+      customers: "localId, _id, name, normalizedName, userId, synced, totalUdhar, isPaid, createdAt",
+      easypaisa: "localId, _id, userId, synced, createdAt, type, customerName",
+      syncQueue: "++id, type, localId, createdAt",
+    });
+
+    // V6 — same schema, forces browser to refresh for Easypaisa fix
+    this.version(6).stores({
       products: "localId, _id, userId, synced, name, category, createdAt",
       sales: "localId, _id, productId, userId, synced, createdAt, customerName, status, category, paymentType",
       customers: "localId, _id, name, normalizedName, userId, synced, totalUdhar, isPaid, createdAt",
@@ -222,4 +230,29 @@ export async function addOfflineWusool(customerLocalId: string, amount: number, 
     attempts: 0,
   });
   return entry;
+}
+
+// Helper for Easypaisa offline save — use this in easypaisa/page.tsx
+export async function addOfflineEasypaisa(data: Omit<OfflineEasypaisa, "localId" | "createdAt" | "synced" | "totalAmount"> & { totalAmount?: number }): Promise<string> {
+  const localId = `easy_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  await offlineDB.easypaisa.add({
+    localId,
+    customerName: data.customerName || "Walk-in",
+    phone: data.phone || "",
+    type: data.type,
+    amount: rnd(data.amount),
+    commission: rnd(data.commission),
+    totalAmount: rnd((data.totalAmount ?? data.amount + data.commission)),
+    userId: data.userId,
+    createdAt: new Date().toISOString(),
+    synced: 0,
+  });
+  await offlineDB.syncQueue.add({
+    type: "easypaisa",
+    localId,
+    payload: { ...data, localId, amount: rnd(data.amount), commission: rnd(data.commission) } as OfflinePayload,
+    createdAt: new Date(),
+    attempts: 0,
+  });
+  return localId;
 }

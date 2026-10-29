@@ -24,6 +24,7 @@ export interface EasypaisaInput {
   amount: number;
   commission: number;
   userId: string;
+  localId?: string;
 }
 
 function genLocalId(prefix: string): string {
@@ -49,103 +50,54 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
   const localId = data.localId || genLocalId("sale");
 
   const sale: OfflineSale = {
-    localId,
-    productId: data.productId,
-    productName: data.productName,
-    category: data.category,
-    quantity: qty,
-    sellPrice: sell,
-    buyPrice: buy,
-    buyPriceAvg: buy,
-    total,
-    profit,
+    localId, productId: data.productId, productName: data.productName,
+    category: data.category, quantity: qty, sellPrice: sell,
+    buyPrice: buy, buyPriceAvg: buy, total, profit,
     customerName: data.customerName || "Walk-in",
-    paymentType: data.paymentType || "cash",
-    status,
-    userId: data.userId,
-    createdAt: nowISO,
-    synced: 0,
+    paymentType: data.paymentType || "cash", status, userId: data.userId,
+    createdAt: nowISO, synced: 0,
   };
 
   try {
     await offlineDB.transaction("rw", offlineDB.products, offlineDB.sales, offlineDB.customers, offlineDB.syncQueue, async () => {
-      // Best effort stock deduct — NEVER throw
       try {
         const product =
           (await offlineDB.products.get(data.productId)) ||
           (await offlineDB.products.where("localId").equals(data.productId).first()) ||
           (await offlineDB.products.where("_id").equals(data.productId).first());
-
         if (product && product.stockMode === "limited") {
           const newStock = rnd(product.stock - qty);
-          await offlineDB.products.update(product.localId, {
-            stock: newStock < 0 ? 0 : newStock,
-            synced: 0,
-          });
+          await offlineDB.products.update(product.localId, { stock: newStock < 0 ? 0 : newStock, synced: 0 });
         }
-      } catch {
-        // ignore
-      }
-
+      } catch {}
       await offlineDB.sales.put(sale);
-
-      const queueItem: SyncQueueItem = {
-        type: "sale",
-        localId,
-        payload: sale as OfflinePayload,
-        createdAt: new Date(),
-        attempts: 0,
-      };
-      await offlineDB.syncQueue.put(queueItem);
-
+      await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 } as SyncQueueItem);
       if (isCredit && data.customerName && data.customerName.toLowerCase() !== "walk-in") {
         const normalized = data.customerName.trim().toLowerCase();
         const existing = await offlineDB.customers.where("normalizedName").equals(normalized).first();
         if (existing && !existing.isPaid) {
           await offlineDB.customers.update(existing.localId, {
-            totalUdhar: rnd(existing.totalUdhar + total),
-            totalBusiness: rnd(existing.totalBusiness + total),
-            saleIds: [...(existing.saleIds || []), localId],
-            billsCount: rnd((existing.billsCount || 0) + 1),
-            lastUdharDate: nowISO,
-            synced: 0,
+            totalUdhar: rnd(existing.totalUdhar + total), totalBusiness: rnd(existing.totalBusiness + total),
+            saleIds: [...(existing.saleIds || []), localId], billsCount: rnd((existing.billsCount || 0) + 1),
+            lastUdharDate: nowISO, synced: 0,
           });
           await offlineDB.sales.update(localId, { customerId: existing.localId });
         } else {
           const custLocalId = genLocalId("cust");
           await offlineDB.customers.add({
-            localId: custLocalId,
-            saleIds: [localId],
-            name: data.customerName.trim(),
-            normalizedName: normalized,
-            phone: data.phone || "",
-            village: data.village || "",
-            totalUdhar: total,
-            totalBusiness: total,
-            lastUdharDate: nowISO,
-            synced: 0,
-            createdAt: nowISO,
-            billsCount: 1,
-            isPaid: false,
-            paidAmount: 0,
-            wusoolHistory: [],
-            userId: data.userId,
+            localId: custLocalId, saleIds: [localId], name: data.customerName.trim(),
+            normalizedName: normalized, phone: data.phone || "", village: data.village || "",
+            totalUdhar: total, totalBusiness: total, lastUdharDate: nowISO, synced: 0,
+            createdAt: nowISO, billsCount: 1, isPaid: false, paidAmount: 0, wusoolHistory: [], userId: data.userId,
           });
           await offlineDB.sales.update(localId, { customerId: custLocalId });
         }
       }
     });
   } catch (e) {
-    // Fallback if transaction fails — still save
     console.warn("saveSaleOffline transaction failed, fallback", e);
     await offlineDB.sales.put(sale);
-    await offlineDB.syncQueue.put({
-      type: "sale",
-      localId,
-      payload: sale as OfflinePayload,
-      createdAt: new Date(),
-      attempts: 0,
-    } as SyncQueueItem);
+    await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 } as SyncQueueItem);
   }
 
   if (typeof window !== "undefined" && "serviceWorker" in navigator) {
@@ -158,7 +110,7 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
 }
 
 export async function saveEasypaisaOffline(data: EasypaisaInput): Promise<string> {
-  const localId = genLocalId("easy");
+  const localId = data.localId || genLocalId("easy");
   const entry: OfflineEasypaisa = {
     localId,
     customerName: data.customerName || "Walk-in",
@@ -188,24 +140,17 @@ export async function syncOfflineSales(): Promise<{ synced: number }> {
   for (const s of sales) {
     try {
       const res = await fetch("/api/sales", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          productId: s.productId,
-          productName: s.productName,
-          quantity: s.quantity,
-          sellPrice: s.sellPrice,
-          buyPriceAvg: s.buyPriceAvg,
-          buyPrice: s.buyPrice,
-          customerName: s.customerName,
-          paymentType: s.paymentType,
-          category: s.category,
-          localId: s.localId,
-          userId: s.userId,
+          productId: s.productId, productName: s.productName, quantity: s.quantity,
+          sellPrice: s.sellPrice, buyPriceAvg: s.buyPriceAvg, buyPrice: s.buyPrice,
+          customerName: s.customerName, paymentType: s.paymentType, category: s.category,
+          localId: s.localId, userId: s.userId,
         }),
       });
       if (res.ok) {
         await offlineDB.sales.update(s.localId, { synced: 1 });
+        await offlineDB.syncQueue.where("localId").equals(s.localId).delete();
         synced++;
       }
     } catch {}
@@ -221,12 +166,16 @@ export async function syncAllOffline(): Promise<{ sales: number; easypaisa: numb
   for (const e of easy) {
     try {
       const res = await fetch("/api/easypaisa", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(e),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: e.type, amount: e.amount, commission: e.commission,
+          customerName: e.customerName, phone: e.phone || "",
+          localId: e.localId, userId: e.userId, createdAt: e.createdAt,
+        }),
       });
       if (res.ok) {
         await offlineDB.easypaisa.update(e.localId, { synced: 1 });
+        await offlineDB.syncQueue.where("localId").equals(e.localId).delete();
         easySynced++;
       }
     } catch {}
@@ -235,7 +184,5 @@ export async function syncAllOffline(): Promise<{ sales: number; easypaisa: numb
 }
 
 if (typeof window !== "undefined") {
-  window.addEventListener("online", () => {
-    void syncAllOffline();
-  });
+  window.addEventListener("online", () => { void syncAllOffline(); });
 }

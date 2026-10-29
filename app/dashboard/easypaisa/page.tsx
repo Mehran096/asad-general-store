@@ -1,14 +1,14 @@
 "use client";
-import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
+import { useEffect, useState, useCallback, useSyncExternalStore, useMemo } from "react";
 import Link from "next/link";
 import { offlineDB } from "@/lib/offline-db";
 import type { OfflineEasypaisa } from "@/lib/offline-db";
-import { saveEasypaisaOffline } from "@/lib/offline-sync";
+import { saveEasypaisaOffline, syncAllOffline } from "@/lib/offline-sync";
 import { getOfflineUser } from "@/lib/offline-auth";
 
 type EasyType = "send" | "receive" | "bill" | "easyload" | "jazzcash" | "deposit" | "withdraw";
 type RecordItem = { _id: string; localId?: string; customerName: string; phone?: string; type: EasyType; amount: number; commission: number; totalAmount: number; createdAt: string };
-type EasypaisaApiResponse = { easypaisa: RecordItem[]; totalAmount: number; totalCommission: number };
+type EasypaisaApiResponse = { easypaisa: RecordItem[]; transactions?: RecordItem[]; totalAmount: number; totalCommission: number };
 
 function useIsOnline(){
   const sub = useCallback((cb:()=>void)=>{ window.addEventListener("online",cb); window.addEventListener("offline",cb); return ()=>{ window.removeEventListener("online",cb); window.removeEventListener("offline",cb);};},[]);
@@ -17,6 +17,22 @@ function useIsOnline(){
   return useSyncExternalStore(sub,snap,ss);
 }
 function rnd(n:number){ return Math.round(n||0); }
+
+const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+function isInFilter(dateStr: string, filter: string): boolean {
+  if (filter === "all") return true;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const nowPKT = new Date(now.getTime() + PKT_OFFSET_MS);
+  const y = nowPKT.getUTCFullYear(), m = nowPKT.getUTCMonth(), day = nowPKT.getUTCDate();
+  const startToday = new Date(Date.UTC(y, m, day, 0, 0, 0, 0) - PKT_OFFSET_MS);
+  const endToday = new Date(Date.UTC(y, m, day + 1, 0, 0, 0, 0) - PKT_OFFSET_MS);
+  if (filter === "today") return d >= startToday && d < endToday;
+  if (filter === "weekly") return d >= new Date(startToday.getTime() - 7*24*60*60*1000) && d < endToday;
+  if (filter === "monthly") return d >= new Date(Date.UTC(y, m, 1, 0, 0, 0, 0) - PKT_OFFSET_MS) && d < endToday;
+  if (filter === "yearly") return d >= new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0) - PKT_OFFSET_MS) && d < endToday;
+  return true;
+}
 
 const TYPES: { id: EasyType; label: string; emoji: string; commission: number }[] = [
   { id: "send", label: "Send", emoji: "📤", commission: 20 },
@@ -38,6 +54,7 @@ export default function EasypaisaPage(){
   const [totalAmount, setTotalAmount] = useState(0);
   const [totalCommission, setTotalCommission] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [pendingCount, setPendingCount] = useState(0);
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("");
   const [amount, setAmount] = useState("");
@@ -47,25 +64,50 @@ export default function EasypaisaPage(){
   const load = useCallback(async()=>{
     setLoading(true);
     try{
-      if(typeof window!=="undefined" && !window.navigator.onLine){
-        const all = await offlineDB.easypaisa.reverse().toArray();
-        setRecords(all.map((o: OfflineEasypaisa)=>({ 
+      const offlineNow = typeof window!=="undefined" && !window.navigator.onLine;
+      if(offlineNow){
+        const all = await offlineDB.easypaisa.orderBy("createdAt").reverse().toArray();
+        let filtered = all.filter(o => isInFilter(o.createdAt, filter));
+        if(typeFilter!=="all") filtered = filtered.filter(o=>o.type===typeFilter);
+        if(search) {
+          const s = search.toLowerCase();
+          filtered = filtered.filter(o=> o.customerName.toLowerCase().includes(s) || (o.phone||"").includes(s));
+        }
+        setRecords(filtered.map((o: OfflineEasypaisa)=>({ 
           _id:o.localId, localId:o.localId, customerName:o.customerName, phone:o.phone, 
           type:o.type, amount:o.amount, commission:o.commission, 
           totalAmount:o.totalAmount, createdAt:o.createdAt 
         })));
-        setTotalAmount(rnd(all.reduce((a,b)=>a+b.amount,0)));
-        setTotalCommission(rnd(all.reduce((a,b)=>a+b.commission,0)));
+        setTotalAmount(rnd(filtered.reduce((a,b)=>a+b.amount,0)));
+        setTotalCommission(rnd(filtered.reduce((a,b)=>a+b.commission,0)));
+        setPendingCount(await offlineDB.easypaisa.where("synced").equals(0).count());
       } else {
+        try { await syncAllOffline(); } catch {}
         const res = await fetch(`/api/easypaisa?filter=${filter}&type=${typeFilter}&search=${encodeURIComponent(search)}&limit=50`);
         const data = (await res.json()) as EasypaisaApiResponse;
-        setRecords(data.easypaisa||[]); setTotalAmount(rnd(data.totalAmount||0)); setTotalCommission(rnd(data.totalCommission||0));
+        const list = data.easypaisa || data.transactions || [];
+        setRecords(list);
+        setTotalAmount(rnd(data.totalAmount||0));
+        setTotalCommission(rnd(data.totalCommission||0));
+        setPendingCount(await offlineDB.easypaisa.where("synced").equals(0).count());
       }
     }catch{ /* ignore */ } finally{ setLoading(false); }
   },[filter, typeFilter, search]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{ void load(); },[load]);
+
+  const breakdown = useMemo(()=>{
+    const map: Record<string, { amount: number; commission: number; count: number }> = {};
+    for(const t of TYPES) map[t.id] = { amount:0, commission:0, count:0 };
+    for(const r of records){
+      if(!map[r.type]) map[r.type] = { amount:0, commission:0, count:0 };
+      map[r.type].amount = rnd(map[r.type].amount + r.amount);
+      map[r.type].commission = rnd(map[r.type].commission + r.commission);
+      map[r.type].count++;
+    }
+    return map;
+  },[records]);
 
   const onTypeSelect = (t: typeof TYPES[number]) => {
     setSelectedType(t.id);
@@ -77,23 +119,31 @@ export default function EasypaisaPage(){
     if(!amount){ alert("Amount required"); return; }
     const amt = rnd(Number(amount));
     const comm = rnd(Number(commission||0));
-    const offlineUser = getOfflineUser() as { _id?: string } | null;
+    const offlineUser = getOfflineUser() as { _id?: string; id?: string } | null;
+    const userId = offlineUser?._id || offlineUser?.id || "offline";
     const now = new Date().toISOString();
     const localId = `easy_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
 
-    setRecords(prev=>[{ _id:localId, localId, customerName: customerName||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, totalAmount:amt+comm, createdAt:now }, ...prev]);
-    setTotalAmount(t=>rnd(t+amt)); setTotalCommission(t=>rnd(t+comm));
+    const newItem: RecordItem = { _id:localId, localId, customerName: customerName||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, totalAmount:amt+comm, createdAt:now };
+    setRecords(prev=>[newItem, ...prev]);
+    setTotalAmount(t=>rnd(t+amt));
+    setTotalCommission(t=>rnd(t+comm));
+    const nameToSave = customerName;
     setCustomerName(""); setPhone(""); setAmount(""); setCommission("");
 
-    try{
-      if(typeof window!=="undefined" && window.navigator.onLine){
-        const res = await fetch("/api/easypaisa",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ customerName: customerName||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, localId }) });
-        if(!res.ok) throw new Error();
-      } else {
-        await saveEasypaisaOffline({ customerName: customerName||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, userId: offlineUser?._id||"offline" });
-      }
-    }catch{
-      await saveEasypaisaOffline({ customerName: customerName||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, userId: offlineUser?._id||"offline" });
+    let savedId = localId;
+    try {
+      savedId = await saveEasypaisaOffline({ customerName: nameToSave||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, userId, localId });
+    } catch {}
+
+    if(typeof window!=="undefined" && window.navigator.onLine){
+      try{
+        const res = await fetch("/api/easypaisa",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ customerName: nameToSave||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, localId: savedId, userId }) });
+        if(res.ok){
+          await offlineDB.easypaisa.update(savedId, { synced: 1 });
+          await offlineDB.syncQueue.where("localId").equals(savedId).delete();
+        }
+      }catch{}
     }
   };
 
@@ -101,8 +151,14 @@ export default function EasypaisaPage(){
     if(!confirm("Delete?")) return;
     setRecords(prev=>prev.filter(r=>r._id!==id));
     try{
-      if(id.startsWith("easy_")) await offlineDB.easypaisa.where("localId").equals(id).delete();
-      else await fetch(`/api/easypaisa/${id}`,{ method:"DELETE" });
+      if(id.startsWith("easy_")){
+        await offlineDB.easypaisa.where("localId").equals(id).delete();
+        await offlineDB.syncQueue.where("localId").equals(id).delete();
+      } else {
+        await offlineDB.easypaisa.where("_id").equals(id).delete();
+        await offlineDB.easypaisa.where("localId").equals(id).delete();
+        if(navigator.onLine) await fetch(`/api/easypaisa/${id}`,{ method:"DELETE" });
+      }
     }catch{ /* ignore */ }
   };
 
@@ -110,29 +166,58 @@ export default function EasypaisaPage(){
     <div className="min-h-screen bg-gray-50 p-3 max-w-5xl mx-auto">
       <div className="flex justify-between mb-3">
         <h1 className="font-bold text-[18px]">💰 Asad Easypaisa {isOffline?"📶 Offline":""}</h1>
-        <Link href="/sales" className="bg-white border px-3 py-1 rounded-full text-[11px] font-bold">← POS</Link>
+        <Link href="/dashboard" className="bg-white border px-3 py-1 rounded-full text-[11px] font-bold">← Dashboard</Link>
       </div>
 
+      {isOffline && pendingCount>0 && <div className="mb-3 bg-amber-50 border text-amber-800 text-[11px] p-2 rounded-xl text-center">📶 Offline • {pendingCount} pending — will auto-sync when online</div>}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="bg-white border rounded-xl p-3 h-fit">
-          <p className="font-bold text-[13px] mb-3">+ New Transaction</p>
-          <form onSubmit={onSubmit} className="space-y-2">
-            <div className="grid grid-cols-4 gap-1.5 mb-2">
-              {TYPES.map(t=>(
-                <button key={t.id} type="button" onClick={()=>onTypeSelect(t)} className={`p-2 rounded-xl border text-[10px] font-bold ${selectedType===t.id?"bg-black text-white":"bg-gray-50"}`}>{t.emoji}<br/>{t.label}</button>
-              ))}
+        <div className="space-y-3 h-fit">
+          <div className="bg-white border rounded-xl p-3">
+            <p className="font-bold text-[13px] mb-3">+ New Transaction</p>
+            <form onSubmit={onSubmit} className="space-y-2">
+              <div className="grid grid-cols-4 gap-1.5 mb-2">
+                {TYPES.map(t=>(
+                  <button key={t.id} type="button" onClick={()=>onTypeSelect(t)} className={`p-2 rounded-xl border text-[10px] font-bold ${selectedType===t.id?"bg-black text-white":"bg-gray-50"}`}>{t.emoji}<br/>{t.label}</button>
+                ))}
+              </div>
+              <input value={customerName} onChange={e=>setCustomerName(e.target.value)} placeholder="Customer name (Walk-in)" className="w-full border p-2.5 rounded-xl text-[12px]" />
+              <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Phone 03XX..." className="w-full border p-2.5 rounded-xl text-[12px]" />
+              <div className="grid grid-cols-2 gap-2">
+                <input value={amount} onChange={e=>setAmount(e.target.value)} type="number" placeholder="Amount Rs." className="border p-2.5 rounded-xl text-[12px]" />
+                <input value={commission} onChange={e=>setCommission(e.target.value)} type="number" placeholder="Commission Rs." className="border p-2.5 rounded-xl text-[12px] bg-yellow-50 font-bold" />
+              </div>
+              <button type="submit" className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px]">Add Rs.{amount||0} + Com {commission||0} = Rs.{rnd(Number(amount||0)+Number(commission||0))}</button>
+            </form>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="bg-green-50 border border-green-200 p-2 rounded-xl text-center"><p className="text-[9px] text-gray-500">Total Amount {filter}</p><p className="font-bold text-[13px]">Rs.{totalAmount}</p></div>
+              <div className="bg-blue-50 border border-blue-200 p-2 rounded-xl text-center"><p className="text-[9px] text-gray-500">Commission {filter}</p><p className="font-bold text-[13px] text-blue-700">Rs.{totalCommission}</p></div>
             </div>
-            <input value={customerName} onChange={e=>setCustomerName(e.target.value)} placeholder="Customer name (Walk-in)" className="w-full border p-2.5 rounded-xl text-[12px]" />
-            <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Phone 03XX..." className="w-full border p-2.5 rounded-xl text-[12px]" />
-            <div className="grid grid-cols-2 gap-2">
-              <input value={amount} onChange={e=>setAmount(e.target.value)} type="number" placeholder="Amount Rs." className="border p-2.5 rounded-xl text-[12px]" />
-              <input value={commission} onChange={e=>setCommission(e.target.value)} type="number" placeholder="Commission Rs." className="border p-2.5 rounded-xl text-[12px] bg-yellow-50 font-bold" />
+          </div>
+
+          <div className="bg-white border rounded-xl p-3">
+            <p className="font-bold text-[11px] mb-2">📊 Breakdown — {filter} {typeFilter!=="all"? `• ${typeFilter}`:""}</p>
+            <div className="grid grid-cols-2 gap-1.5">
+              {TYPES.map(t=>{
+                const b = breakdown[t.id];
+                if(!b || b.count===0) return (
+                  <div key={t.id} className="border bg-gray-50 rounded-lg p-2 text-[10px] opacity-60">
+                    <div className="flex justify-between"><span>{t.emoji} {t.label}</span><span className="text-[9px]">0</span></div>
+                    <div className="font-bold">Rs.0</div>
+                  </div>
+                );
+                return (
+                  <div key={t.id} className="border rounded-lg p-2 text-[10px] bg-white">
+                    <div className="flex justify-between"><span className="font-bold">{t.emoji} {t.label}</span><span className="bg-black text-white px-1.5 rounded-full text-[9px]">{b.count}</span></div>
+                    <div className="mt-1"><span className="text-gray-500">Amt:</span> <b>Rs.{b.amount}</b></div>
+                    <div><span className="text-gray-500">Com:</span> <b className="text-green-600">Rs.{b.commission}</b></div>
+                  </div>
+                );
+              })}
             </div>
-            <button type="submit" className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px]">Add Rs.{amount||0} + Com {commission||0} = Rs.{rnd(Number(amount||0)+Number(commission||0))}</button>
-          </form>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <div className="bg-green-50 border border-green-200 p-2 rounded-xl text-center"><p className="text-[9px] text-gray-500">Total Amount {filter}</p><p className="font-bold text-[13px]">Rs.{totalAmount}</p></div>
-            <div className="bg-blue-50 border border-blue-200 p-2 rounded-xl text-center"><p className="text-[9px] text-gray-500">Commission {filter}</p><p className="font-bold text-[13px] text-blue-700">Rs.{totalCommission}</p></div>
+            <div className="mt-2 pt-2 border-t flex justify-between text-[11px] font-bold">
+              <span>Total {records.length} Tx</span><span>Rs.{totalAmount} <span className="text-green-600">+{totalCommission}</span></span>
+            </div>
           </div>
         </div>
 
@@ -144,7 +229,8 @@ export default function EasypaisaPage(){
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search name / phone..." className="w-full border p-2.5 rounded-xl bg-white text-[12px]" />
           {loading? <p className="text-center py-10 text-[12px]">Loading...</p> :
           <div className="space-y-1.5">
-            {records.map(r=>(
+            {records.length===0? <p className="text-center py-8 text-[11px] text-gray-400">No transactions — {filter}</p> :
+            records.map(r=>(
               <div key={r._id} className="bg-white border rounded-xl p-2.5 flex justify-between text-[11px]">
                 <div><b>{r.customerName}</b> {r.phone? `• ${r.phone}`:""} <span className="bg-gray-100 px-2 py-0.5 rounded-full text-[9px] ml-1">{r.type}</span><div className="text-[9px] text-gray-400">{new Date(r.createdAt).toLocaleTimeString()} • Amount {r.amount} + Com {r.commission}</div></div>
                 <div className="text-right flex gap-2 items-center"><span className="font-bold">Rs.{r.totalAmount} <span className="text-green-600 text-[9px]">+{r.commission}</span></span><button onClick={()=>onDelete(r._id)} className="text-red-500">✕</button></div>
