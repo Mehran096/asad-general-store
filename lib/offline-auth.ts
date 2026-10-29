@@ -7,7 +7,7 @@ export interface CachedUser {
 }
 
 const KEY = 'offline_user';
-const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+const ONE_YEAR = 365 * 24 * 60 * 60 * 1000;
 
 export function cacheUserForOffline(user: { _id: string; email: string; name: string; role: 'owner' | 'worker' }): void {
   if (typeof window === "undefined") return;
@@ -28,7 +28,7 @@ export function getOfflineUser(): CachedUser | null {
     if (!cached) return null;
     const user = JSON.parse(cached) as CachedUser;
     if (!user?._id || !user?.cachedAt) return null;
-    if (Date.now() - user.cachedAt > SEVEN_DAYS) {
+    if (Date.now() - user.cachedAt > ONE_YEAR) {
       localStorage.removeItem(KEY);
       return null;
     }

@@ -28,7 +28,7 @@ export default function TopPage(){
     <div className="p-2 sm:p-4 max-w-4xl mx-auto min-h-screen bg-gray-50">
       <div className="flex justify-between items-center mb-3">
         <div><h1 className="font-bold text-[16px] sm:text-[18px]">🔥 Asad Top Selling</h1><p className="text-[10px] text-gray-500 capitalize">{filter} • {category} • {top.length} items</p></div>
-        <Link href="/sales" className="text-[10px] bg-white border px-3 py-1.5 rounded-full font-bold">← POS</Link>
+        <Link href="/dashboard/sales" className="text-[10px] bg-white border px-3 py-1.5 rounded-full font-bold">← POS</Link>
       </div>
 
       <div className="flex gap-1.5 mb-2 overflow-x-auto">

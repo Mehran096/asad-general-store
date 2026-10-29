@@ -161,12 +161,12 @@ export default function AsadDashboard(){
       </div>
 
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
-        <Link href="/sales" className="bg-black text-white p-4 rounded-xl text-center font-bold text-[13px]">🛒 POS Sale</Link>
-        <Link href="/products" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">📦 Products</Link>
-        <Link href="/easypaisa" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">💰 Easypaisa</Link>
-        <Link href="/khata" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">📒 Khata</Link>
-        <Link href="/sales/history" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">📜 History</Link>
-        <Link href="/sales/top" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">🔥 Top Sell</Link>
+        <Link href="/dashboard/sales" className="bg-black text-white p-4 rounded-xl text-center font-bold text-[13px]">🛒 POS Sale</Link>
+        <Link href="/dashboard/products" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">📦 Products</Link>
+        <Link href="/dashboard/easypaisa" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">💰 Easypaisa</Link>
+        <Link href="/dashboard/customers" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">📒 Khata</Link>
+        <Link href="/dashboard/sales/history" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">📜 History</Link>
+        <Link href="/dashboard/sales/top" className="bg-white border p-4 rounded-xl text-center font-bold text-[13px]">🔥 Top Sell</Link>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

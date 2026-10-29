@@ -6,88 +6,34 @@ export type EasyType = "send" | "receive" | "bill" | "easyload" | "jazzcash" | "
 export type SaleCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other";
 
 export interface OfflineProduct {
-  localId: string;
-  _id?: string;
-  name: string;
-  category: SaleCategory;
-  company?: string;
-  buyPrice: number;
-  buyPriceAvg: number;
-  sellPrice: number;
-  stock: number;
-  stockMode: "limited" | "unlimited";
-  userId: string;
-  synced: number;
-  createdAt: string;
-  lastSyncedAt?: string;
+  localId: string; _id?: string; name: string; category: SaleCategory;
+  company?: string; buyPrice: number; buyPriceAvg: number; sellPrice: number;
+  stock: number; stockMode: "limited" | "unlimited"; userId: string;
+  synced: number; createdAt: string; lastSyncedAt?: string;
 }
-
 export interface OfflineSale {
-  localId: string;
-  _id?: string;
-  productId: string;
-  productName: string;
-  category: SaleCategory;
-  quantity: number;
-  sellPrice: number;
-  buyPrice: number;
-  buyPriceAvg: number;
-  total: number;
-  profit: number;
-  customerName: string;
-  paymentType: "cash" | "credit";
-  status: "paid" | "pending";
-  userId: string;
-  createdAt: string;
-  synced: number;
-  customerId?: string;
+  localId: string; _id?: string; productId: string; productName: string;
+  category: SaleCategory; quantity: number; sellPrice: number; buyPrice: number;
+  buyPriceAvg: number; total: number; profit: number; customerName: string;
+  paymentType: "cash" | "credit"; status: "paid" | "pending"; userId: string;
+  createdAt: string; synced: number; customerId?: string;
 }
-
 export interface OfflineCustomer {
-  localId: string;
-  _id?: string;
-  saleIds: string[];
-  name: string;
-  normalizedName: string;
-  phone?: string;
-  village?: string;
-  totalUdhar: number;
-  totalBusiness: number;
-  lastUdharDate?: string;
-  lastWusoolDate?: string;
-  paidAt?: string;
-  synced: number;
-  createdAt?: string;
-  billsCount: number;
-  isPaid?: boolean;
-  paidAmount?: number;
-  wusoolHistory?: WusoolHistoryEntry[];
-  userId?: string;
+  localId: string; _id?: string; saleIds: string[]; name: string; normalizedName: string;
+  phone?: string; village?: string; totalUdhar: number; totalBusiness: number;
+  lastUdharDate?: string; lastWusoolDate?: string; paidAt?: string; synced: number;
+  createdAt?: string; billsCount: number; isPaid?: boolean; paidAmount?: number;
+  wusoolHistory?: WusoolHistoryEntry[]; userId?: string;
 }
-
 export interface OfflineEasypaisa {
-  localId: string;
-  _id?: string;
-  customerName: string;
-  phone?: string;
-  type: EasyType;
-  amount: number;
-  commission: number;
-  totalAmount: number;
-  userId: string;
-  createdAt: string;
-  synced: number;
+  localId: string; _id?: string; customerName: string; phone?: string; type: EasyType;
+  amount: number; commission: number; totalAmount: number; userId: string;
+  createdAt: string; synced: number;
 }
-
 export type OfflinePayload = OfflineSale | OfflineProduct | OfflineCustomer | WusoolSyncPayload | OfflineEasypaisa;
-
 export interface SyncQueueItem {
-  id?: number;
-  type: "sale" | "product" | "customer" | "wusool" | "easypaisa";
-  localId: string;
-  payload: OfflinePayload;
-  createdAt: Date;
-  attempts: number;
+  id?: number; type: "sale" | "product" | "customer" | "wusool" | "easypaisa";
+  localId: string; payload: OfflinePayload; createdAt: Date; attempts: number;
 }
 
 type LegacyProductForMigration = {
@@ -95,9 +41,7 @@ type LegacyProductForMigration = {
   buyPriceAvg?: number;
 };
 
-function rnd(n: number): number {
-  return Math.round(n || 0);
-}
+function rnd(n: number): number { return Math.round(n || 0); }
 
 export class OfflineDB extends Dexie {
   products!: Table<OfflineProduct, string>;
@@ -138,7 +82,6 @@ export class OfflineDB extends Dexie {
       syncQueue: "++id, type, localId, createdAt",
     });
 
-    // V6 — same schema, forces browser to refresh for Easypaisa fix
     this.version(6).stores({
       products: "localId, _id, userId, synced, name, category, createdAt",
       sales: "localId, _id, productId, userId, synced, createdAt, customerName, status, category, paymentType",
@@ -177,22 +120,11 @@ export async function upsertOfflineCustomer(sale: OfflineSale, village = "", pho
   } else {
     const localId = `cust_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     await offlineDB.customers.add({
-      localId,
-      saleIds: [sale.localId],
-      name,
-      normalizedName: normalized,
-      phone,
-      village,
-      totalUdhar: rnd(sale.total),
-      totalBusiness: rnd(sale.total),
-      lastUdharDate: new Date().toISOString(),
-      synced: 0,
-      createdAt: new Date().toISOString(),
-      billsCount: 1,
-      isPaid: false,
-      paidAmount: 0,
-      wusoolHistory: [],
-      userId: sale.userId,
+      localId, saleIds: [sale.localId], name, normalizedName: normalized,
+      phone, village, totalUdhar: rnd(sale.total), totalBusiness: rnd(sale.total),
+      lastUdharDate: new Date().toISOString(), synced: 0,
+      createdAt: new Date().toISOString(), billsCount: 1, isPaid: false, paidAmount: 0,
+      wusoolHistory: [], userId: sale.userId,
     });
     return localId;
   }
@@ -206,53 +138,19 @@ export async function addOfflineWusool(customerLocalId: string, amount: number, 
   const entry: WusoolHistoryEntry = { amount: paid, date: new Date().toISOString(), note };
   if (newUdhar <= 0) {
     await offlineDB.customers.update(customerLocalId, {
-      totalUdhar: 0,
-      isPaid: true,
-      paidAmount: customer.totalBusiness,
-      lastWusoolDate: entry.date,
-      wusoolHistory: [...(customer.wusoolHistory || []), entry],
-      synced: 0,
+      totalUdhar: 0, isPaid: true, paidAmount: customer.totalBusiness,
+      lastWusoolDate: entry.date, wusoolHistory: [...(customer.wusoolHistory || []), entry], synced: 0,
     });
   } else {
     await offlineDB.customers.update(customerLocalId, {
-      totalUdhar: newUdhar,
-      paidAmount: rnd((customer.paidAmount || 0) + paid),
-      lastWusoolDate: entry.date,
-      wusoolHistory: [...(customer.wusoolHistory || []), entry],
-      synced: 0,
+      totalUdhar: newUdhar, paidAmount: rnd((customer.paidAmount || 0) + paid),
+      lastWusoolDate: entry.date, wusoolHistory: [...(customer.wusoolHistory || []), entry], synced: 0,
     });
   }
   await offlineDB.syncQueue.add({
-    type: "wusool",
-    localId: customerLocalId,
+    type: "wusool", localId: customerLocalId,
     payload: { amount: paid, note, date: entry.date, customerLocalId },
-    createdAt: new Date(),
-    attempts: 0,
+    createdAt: new Date(), attempts: 0,
   });
   return entry;
-}
-
-// Helper for Easypaisa offline save — use this in easypaisa/page.tsx
-export async function addOfflineEasypaisa(data: Omit<OfflineEasypaisa, "localId" | "createdAt" | "synced" | "totalAmount"> & { totalAmount?: number }): Promise<string> {
-  const localId = `easy_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  await offlineDB.easypaisa.add({
-    localId,
-    customerName: data.customerName || "Walk-in",
-    phone: data.phone || "",
-    type: data.type,
-    amount: rnd(data.amount),
-    commission: rnd(data.commission),
-    totalAmount: rnd((data.totalAmount ?? data.amount + data.commission)),
-    userId: data.userId,
-    createdAt: new Date().toISOString(),
-    synced: 0,
-  });
-  await offlineDB.syncQueue.add({
-    type: "easypaisa",
-    localId,
-    payload: { ...data, localId, amount: rnd(data.amount), commission: rnd(data.commission) } as OfflinePayload,
-    createdAt: new Date(),
-    attempts: 0,
-  });
-  return localId;
 }

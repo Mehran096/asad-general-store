@@ -2,7 +2,9 @@
 import Link from "next/link";
 import { useState, useCallback, useEffect, useSyncExternalStore } from "react";
 import { usePathname } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { offlineDB } from "@/lib/offline-db";
+import { clearOfflineUser } from "@/lib/offline-auth";
 
 function useIsOnline(){
   const sub = useCallback((cb:()=>void)=>{ window.addEventListener("online",cb); window.addEventListener("offline",cb); return ()=>{ window.removeEventListener("online",cb); window.removeEventListener("offline",cb);};},[]);
@@ -23,6 +25,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [pathname]);
 
   const linkClass = (href: string) => `p-2.5 rounded-lg text-[13px] ${isActive(href)? "bg-black text-white font-bold" : "hover:bg-zinc-800 text-white/80"}`;
+
+  const handleLogout = async () => {
+    if(typeof window !== "undefined"){
+      localStorage.removeItem("offline_mode");
+      clearOfflineUser();
+    }
+    await signOut({ callbackUrl: "/login" });
+  };
 
   useEffect(()=>{
     const update = async()=>{
@@ -68,7 +78,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/dashboard/sales/top" onClick={()=>setOpen(false)} className={linkClass("/dashboard/sales/top")}>🔥 Top Selling</Link>
         </nav>
 
-        <div className="mt-auto pt-6 text-[10px] text-zinc-500 text-center">{isOnline? "🟢 Online":"🟡 Offline"} • Asad Store V2</div>
+        <div className="mt-auto pt-4 border-t border-zinc-800">
+          <button 
+            onClick={handleLogout} 
+            className="w-full p-2.5 rounded-lg text-[13px] bg-zinc-800 hover:bg-red-600 text-white font-bold transition flex items-center justify-center gap-2"
+          >
+            🚪 Logout
+          </button>
+          <div className="mt-3 text-[10px] text-zinc-500 text-center">{isOnline? "🟢 Online":"🟡 Offline"} • Asad Store V2 • 1yr login</div>
+        </div>
       </aside>
 
       {open && <button onClick={()=>setOpen(false)} className="fixed inset-0 bg-black/50 z-30 md:hidden" aria-label="Close menu" />}

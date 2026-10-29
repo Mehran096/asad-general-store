@@ -1,4 +1,4 @@
-const CACHE = 'medicine-v3'; // changed from al-farooq-v6
+const CACHE = 'asad-store-v1'; // was medicine-v3
 
 const PRECACHE = [
   '/offline',
@@ -49,7 +49,7 @@ self.addEventListener('activate', (e) => {
       .then((keys) => Promise.all(
         keys
           .filter((k) => k !== CACHE)
-          .filter((k) => k.startsWith('al-farooq-') || k.includes('sona') || k.includes('agri-pwa') || k.includes('medicine-') || k.startsWith('agri-'))
+          .filter((k) => k.startsWith('medicine-') || k.startsWith('al-farooq-') || k.includes('sona') || k.includes('agri-pwa') || k.startsWith('agri-') || k.startsWith('yasir-'))
           .map((k) => {
             console.log('Deleting old cache:', k);
             return caches.delete(k);
@@ -90,7 +90,7 @@ self.addEventListener('fetch', (e) => {
                  (await cache.match('/login')) ||
                  (await cache.match('/')) ||
                  new Response(
-                   `<html><body style="font-family:system-ui;text-align:center;padding:40px"><img src="/logo.png" style="width:80px;height:80px;border-radius:50%"/><h1>Yasir Medical Store</h1><p>یاسر میڈیکل سٹور - Offline</p><p>Medicine billing available offline</p></body></html>`,
+                   `<html><body style="font-family:system-ui;text-align:center;padding:40px"><img src="/logo.png" style="width:80px;height:80px;border-radius:50%"/><h1>Asad General Store</h1><p>اسد جنرل سٹور - Offline</p><p>Mobile Accessories • Manyari • Cosmetics billing available offline</p></body></html>`,
                    { headers: { 'Content-Type': 'text/html' } }
                  );
         })

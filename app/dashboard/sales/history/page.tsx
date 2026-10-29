@@ -33,6 +33,22 @@ function useIsOnline(){
 }
 function rnd(n:number){ return Math.round(n||0); }
 
+const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+function isInFilter(dateStr: string, filter: string): boolean {
+  if (filter === "all") return true;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const nowPKT = new Date(now.getTime() + PKT_OFFSET_MS);
+  const y = nowPKT.getUTCFullYear(), m = nowPKT.getUTCMonth(), day = nowPKT.getUTCDate();
+  const startToday = new Date(Date.UTC(y, m, day, 0, 0, 0, 0) - PKT_OFFSET_MS);
+  const endToday = new Date(Date.UTC(y, m, day + 1, 0, 0, 0, 0) - PKT_OFFSET_MS);
+  if (filter === "today") return d >= startToday && d < endToday;
+  if (filter === "weekly") return d >= new Date(startToday.getTime() - 7*24*60*60*1000) && d < endToday;
+  if (filter === "monthly") return d >= new Date(Date.UTC(y, m, 1, 0, 0, 0, 0) - PKT_OFFSET_MS) && d < endToday;
+  if (filter === "yearly") return d >= new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0) - PKT_OFFSET_MS) && d < endToday;
+  return true;
+}
+
 export default function SalesHistoryPage() {
   const isOnline = useIsOnline();
   const isOffline = !isOnline;
@@ -51,15 +67,17 @@ export default function SalesHistoryPage() {
     if(p===1) setLoading(true);
     try{
       if(typeof window!=="undefined" && !window.navigator.onLine){
-        const all = await offlineDB.sales.reverse().toArray();
+        const all = await offlineDB.sales.orderBy("createdAt").reverse().toArray();
         const filtered = all.filter((o: OfflineSale)=>{
+          const inDate = isInFilter(o.createdAt, f);
           const matchSearch = !s || o.productName.toLowerCase().includes(s.toLowerCase()) || (o.customerName||"").toLowerCase().includes(s.toLowerCase());
-          const matchStatus = status==="all" || (status==="pending" ? o.status==="pending" : o.status!=="pending");
-          return matchSearch && matchStatus;
+          const isUdhar = o.paymentType === "credit" || o.status === "pending";
+          const matchStatus = status==="all" ? true : status==="pending" ? isUdhar : !isUdhar;
+          return inDate && matchSearch && matchStatus;
         });
         const paged = filtered.slice((p-1)*20, p*20);
         setSales(paged.map((o: OfflineSale)=>({ 
-          _id:o.localId, productName:o.productName, category:o.category||"other", 
+          _id:o.localId, productName:o.productName, category:(o.category as Category)||"other", 
           quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, 
           createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType 
         })));
@@ -67,20 +85,30 @@ export default function SalesHistoryPage() {
         const pr = filtered.reduce((a,b)=>a+b.profit,0);
         setTotal(rnd(t)); setProfit(rnd(pr));
         setPagination({ page:p, totalPages: Math.ceil(filtered.length/20), hasMore: filtered.length > p*20, totalCount: filtered.length });
+        // offline pending total
+        const pendingOffline = all.filter(o=> (o.paymentType==="credit"||o.status==="pending") && isInFilter(o.createdAt, f)).reduce((a,b)=>a+b.total,0);
+        setPendingTotal(rnd(pendingOffline));
         return;
       }
-      const statusQ = status!=="all" ? `&paymentType=${status==="pending"?"credit":"cash"}` : "";
+      // FIX: map pending->credit, paid->cash, all->omit
+      const statusQ = status==="pending" ? "&paymentType=credit" : status==="paid" ? "&paymentType=cash" : "";
       const res = await fetch(`/api/sales?filter=${f}&search=${encodeURIComponent(s)}&page=${p}&limit=20${statusQ}`);
       const data = (await res.json()) as SalesApiResponse;
       if(p===1) setSales(data.sales); else setSales(prev=>[...prev,...data.sales]);
       setTotal(rnd(data.total)); setProfit(rnd(data.profit)); setPagination(data.pagination);
 
-      const pendingRes = await fetch(`/api/customers?status=pending&filter=${f}`);
-      if(pendingRes.ok){
-        const cData = (await pendingRes.json()) as { customers?: CustomerRow[] };
-        const pending = (cData.customers||[]).reduce((a,b)=>a+(b.totalUdhar||0),0);
-        setPendingTotal(rnd(pending));
-      }
+      try{
+        const pendingRes = await fetch(`/api/customers?status=pending&filter=${f}`);
+        if(pendingRes.ok){
+          const cData = (await pendingRes.json()) as { customers?: CustomerRow[]; totalUdhar?: number };
+          if(typeof cData.totalUdhar === "number"){
+            setPendingTotal(rnd(cData.totalUdhar));
+          } else {
+            const pending = (cData.customers||[]).reduce((a,b)=>a+(b.totalUdhar||0),0);
+            setPendingTotal(rnd(pending));
+          }
+        }
+      }catch{}
     }catch{ /* ignore */ } finally{ setLoading(false); }
   },[]);
 
@@ -90,16 +118,22 @@ export default function SalesHistoryPage() {
   },[filter,search,page,statusFilter,loadData]);
 
   const grouped: Record<string, Sale[]> = {};
-  sales.forEach(s=>{ const d=new Date(s.createdAt).toLocaleDateString(); if(!grouped[d]) grouped[d]=[]; grouped[d].push(s); });
+  sales.forEach(s=>{ 
+    const d = new Date(s.createdAt);
+    const pkt = new Date(d.getTime() + PKT_OFFSET_MS);
+    const key = pkt.toISOString().slice(0,10); // YYYY-MM-DD PKT
+    if(!grouped[key]) grouped[key]=[]; 
+    grouped[key].push(s); 
+  });
 
   return (
     <div className="p-3 sm:p-6 max-w-6xl mx-auto min-h-screen bg-gray-50">
-      {isOffline && <div className="mb-3 bg-amber-50 border text-amber-800 text-[12px] p-2.5 rounded-xl text-center">📶 Offline</div>}
-      {pendingTotal>0 && <div className="mb-3 bg-red-50 border border-red-200 text-red-800 text-[12px] p-2.5 rounded-xl flex justify-between"><span>📒 Udhar Pending: Rs.{pendingTotal}</span><Link href="/khata" className="bg-red-600 text-white px-3 py-1 rounded-lg text-[10px]">Khata</Link></div>}
+      {isOffline && <div className="mb-3 bg-amber-50 border text-amber-800 text-[12px] p-2.5 rounded-xl text-center">📶 Offline • Showing offline sales</div>}
+      {pendingTotal>0 && <div className="mb-3 bg-red-50 border border-red-200 text-red-800 text-[12px] p-2.5 rounded-xl flex justify-between"><span>📒 Udhar Pending ({filter}): Rs.{pendingTotal}</span><Link href="/khata" className="bg-red-600 text-white px-3 py-1 rounded-lg text-[10px]">Khata</Link></div>}
       
       <div className="flex justify-between mb-4">
-        <div><Link href="/sales" className="text-[11px] text-gray-500">← POS</Link><h1 className="text-[17px] font-bold">📜 Asad Sales History</h1><p className="text-[11px] text-gray-500">{filter.toUpperCase()} • {pagination.totalCount} sales • Rs.{total} profit {profit}</p></div>
-        <Link href="/sales" className="bg-black text-white px-4 py-2 rounded-xl text-[12px] h-fit">+ New Sale</Link>
+        <div><Link href="/dashboard/sales" className="text-[11px] text-gray-500">← POS</Link><h1 className="text-[17px] font-bold">📜 Asad Sales History</h1><p className="text-[11px] text-gray-500">{filter.toUpperCase()} • {pagination.totalCount} sales • Rs.{total} • Profit Rs.{profit}</p></div>
+        <Link href="/dashboard/sales" className="bg-black text-white px-4 py-2 rounded-xl text-[12px] h-fit">+ New Sale</Link>
       </div>
 
       <div className="bg-white p-3 rounded-xl border mb-4 flex flex-col gap-2">
@@ -110,12 +144,12 @@ export default function SalesHistoryPage() {
 
       {loading && page===1 ? <p className="text-center py-10 text-[12px]">Loading...</p> : (
         <div className="space-y-3">
-          {Object.keys(grouped).length===0 ? <p className="text-center py-10 bg-white rounded-xl border text-[12px]">No sales</p> :
-          Object.entries(grouped).map(([date, daySales])=>{
+          {Object.keys(grouped).length===0 ? <p className="text-center py-10 bg-white rounded-xl border text-[12px]">No sales — {filter} {statusFilter!=="all"? `• ${statusFilter}`:""}</p> :
+          Object.entries(grouped).sort((a,b)=> b[0].localeCompare(a[0])).map(([date, daySales])=>{
             const dt = daySales.reduce((a,b)=>a+b.total,0); const dp = daySales.reduce((a,b)=>a+b.profit,0);
             return(
               <div key={date} className="bg-white rounded-xl border overflow-hidden">
-                <div className="bg-gray-50 px-3 py-2 flex justify-between text-[11px] font-bold border-b"><span>{date} • {daySales.length}</span><span className="text-green-700">Rs.{dt} <span className="text-blue-600">+{dp}</span></span></div>
+                <div className="bg-gray-50 px-3 py-2 flex justify-between text-[11px] font-bold border-b"><span>{date} • {daySales.length} sales</span><span className="text-green-700">Rs.{rnd(dt)} <span className="text-blue-600">Profit +{rnd(dp)}</span></span></div>
                 {daySales.map(s=>(
                   <div key={s._id} className={`px-3 py-2.5 flex justify-between text-[12px] border-b last:border-0 ${s.status==="pending"?"bg-red-50/50":""}`}>
                     <div><p className="font-medium">{s.productName} <span className="text-blue-600">x{s.quantity}</span> {s.customerName && s.customerName!=="Walk-in" ? <span className="bg-yellow-100 px-2 rounded-full text-[10px]">👤 {s.customerName}</span> : null} {s.status==="pending" ? <span className="bg-red-600 text-white px-2 rounded-full text-[9px]">UDHAR</span> : null}</p><p className="text-[10px] text-gray-400">Rs.{s.sellPrice}/pcs • Profit Rs.{s.profit} • {new Date(s.createdAt).toLocaleTimeString()} • {s.category}</p></div>
@@ -128,7 +162,7 @@ export default function SalesHistoryPage() {
           {pagination.hasMore && <button onClick={()=>setPage(p=>p+1)} className="w-full py-2.5 bg-white border rounded-xl text-[12px]">Load More ({pagination.totalCount - sales.length})</button>}
         </div>
       )}
-      <div className="mt-4 bg-black text-white p-4 rounded-xl flex justify-between"><div><p className="text-[12px] opacity-70">Total {filter}</p><p className="text-[11px] opacity-60">Profit Rs.{profit}</p></div><span className="text-[20px] font-bold">Rs.{total}</span></div>
+      <div className="mt-4 bg-black text-white p-4 rounded-xl flex justify-between"><div><p className="text-[12px] opacity-70">Total {filter} • {pagination.totalCount} bills</p><p className="text-[11px] opacity-60">Profit Rs.{profit} • Pending Rs.{pendingTotal}</p></div><span className="text-[20px] font-bold">Rs.{total}</span></div>
     </div>
   );
 }

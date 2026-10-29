@@ -19,41 +19,54 @@ type SaleBody = {
   customerName?: string;
   phone?: string;
   village?: string;
-  paymentType?: "cash" | "credit";
+  paymentType?: "cash" | "credit" | "udhar";
   category?: "mobile_accessories" | "manyari" | "cosmetics" | "other";
   productName?: string;
   localId?: string;
-  userId?: string; // <-- FIX: allow offline userId
+  userId?: string;
 };
 
 function rnd(n: number): number {
   return Math.round(Number(n) || 0);
 }
 
-function getDateRange(filter: string): { start: Date; end: Date } {
+// PKT fixed - Asad shop timezone
+function getDateRange(filter: string): { start: Date; end: Date } | null {
+  if (filter === "all") return null;
   const now = new Date();
-  const start = new Date(now);
-  const end = new Date(now);
+  const pktOffset = 5 * 60 * 60 * 1000;
+  const nowPKT = new Date(now.getTime() + pktOffset);
+  const y = nowPKT.getUTCFullYear(), m = nowPKT.getUTCMonth(), d = nowPKT.getUTCDate();
+  const startToday = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - pktOffset);
+  const endToday = new Date(Date.UTC(y, m, d + 1, 0, 0, 0, 0) - pktOffset);
+  
+  const start = new Date(startToday);
+  const end = new Date(endToday);
+  
   if (filter === "today") {
-    start.setHours(0, 0, 0, 0);
+    // startToday - endToday
   } else if (filter === "yesterday") {
-    start.setDate(now.getDate() - 1);
-    start.setHours(0, 0, 0, 0);
-    end.setDate(now.getDate() - 1);
-    end.setHours(23, 59, 59, 999);
+    start.setDate(start.getDate() - 1);
+    start.setHours(0,0,0,0);
+    end.setDate(end.getDate() - 1);
+    end.setHours(0,0,0,0);
+    // adjust for PKT
+    const s = new Date(Date.UTC(y, m, d-1, 0, 0, 0, 0) - pktOffset);
+    const e = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - pktOffset);
+    return { start: s, end: e };
   } else if (filter === "weekly") {
-    start.setDate(now.getDate() - 7);
-    start.setHours(0, 0, 0, 0);
+    const weekStart = new Date(startToday.getTime() - 7*24*60*60*1000);
+    return { start: weekStart, end: endToday };
   } else if (filter === "monthly") {
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
+    const monthStart = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0) - pktOffset);
+    return { start: monthStart, end: endToday };
   }
-  return { start, end };
+  return { start: startToday, end: endToday };
 }
 
 type SaleQuery = {
   userId: Types.ObjectId;
-  createdAt?: { $gte?: Date; $lte?: Date };
+  createdAt?: { $gte?: Date; $lte?: Date; $lt?: Date };
   category?: string;
   paymentType?: string;
   $or?: Array<{ productName?: { $regex: string; $options: string }; customerName?: { $regex: string; $options: string } }>;
@@ -70,18 +83,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const filter = sp.get("filter") || "today";
     const search = sp.get("search")?.trim() || "";
     const category = sp.get("category") || "";
-    const paymentType = sp.get("paymentType") || "";
+    const rawPaymentType = sp.get("paymentType") || sp.get("type") || "";
     const page = Math.max(1, parseInt(sp.get("page") || "1", 10));
     const limit = Math.min(100, Math.max(1, parseInt(sp.get("limit") || "20", 10)));
     const skip = (page - 1) * limit;
     const userId = new Types.ObjectId(session.user.id);
 
-    const range = filter !== "all" ? getDateRange(filter) : null;
+    const range = getDateRange(filter);
     const q: SaleQuery = { userId };
 
     if (range) {
       if (filter === "yesterday") q.createdAt = { $gte: range.start, $lte: range.end };
-      else q.createdAt = { $gte: range.start };
+      else q.createdAt = { $gte: range.start, $lt: range.end };
     }
     if (search) {
       q.$or = [
@@ -90,7 +103,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       ];
     }
     if (category && category !== "all") q.category = category;
-    if (paymentType) q.paymentType = paymentType;
+    
+    // FIX: map udhar -> credit, ignore all
+    if (rawPaymentType && rawPaymentType !== "all") {
+      const mapped = rawPaymentType === "udhar" ? "credit" : rawPaymentType;
+      if (mapped === "cash" || mapped === "credit") {
+        q.paymentType = mapped;
+      }
+    }
 
     const [sales, totalCount, agg] = await Promise.all([
       Sale.find(q).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
@@ -101,7 +121,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const firstAgg = agg[0] as { total?: number; profit?: number } | undefined;
 
     return NextResponse.json({
-      sales, // ONE BY ONE — NO GROUPING
+      sales,
       total: rnd(firstAgg?.total || 0),
       profit: rnd(firstAgg?.profit || 0),
       pagination: {
@@ -128,7 +148,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "productId, quantity required" }, { status: 400 });
     }
 
-    // FIX: Allow session OR userId from body (offline sync fix)
     let userId: Types.ObjectId;
     if (session?.user?.id && Types.ObjectId.isValid(session.user.id)) {
       userId = new Types.ObjectId(session.user.id);
@@ -162,16 +181,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           }
         }
       }
-    } catch {
-      // offline productId — still create sale
-    }
+    } catch {}
 
     const qty = rnd(body.quantity);
     const sellPrice = rnd(body.sellPrice || 0);
     const buyPrice = rnd(body.buyPriceAvg || body.buyPrice || 0);
     const total = rnd(sellPrice * qty);
     const profit = rnd((sellPrice - buyPrice) * qty);
-    const isCredit = body.paymentType === "credit";
+    const isCredit = body.paymentType === "credit" || body.paymentType === "udhar";
     const customerName = body.customerName?.trim() || "Walk-in";
 
     if (isCredit && customerName.toLowerCase() === "walk-in") {
@@ -210,6 +227,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             userId,
             paidAmount: 0,
             wusoolHistory: [],
+            localId: `cust_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
           },
           $inc: { totalUdhar: total, totalBusiness: total, billsCount: 1 },
           $set: { lastUdharDate: new Date() },

@@ -34,13 +34,13 @@ export const authOptions: NextAuthOptions = {
         const user = (await User.findOne({ email: normalizedEmail }).lean()) as LeanUser | null;
 
         if (!user) {
-          console.log("Yasir Medical: User not found:", normalizedEmail);
+          console.log("Asad Store: User not found:", normalizedEmail);
           return null;
         }
 
         const isValid = await bcrypt.compare(credentials.password, user.password);
         if (!isValid) {
-          console.log("Yasir Medical: Password invalid for:", normalizedEmail);
+          console.log("Asad Store: Password invalid for:", normalizedEmail);
           return null;
         }
 
@@ -73,7 +73,7 @@ export const authOptions: NextAuthOptions = {
   },
   session: {
     strategy: "jwt",
-    maxAge: 7 * 24 * 60 * 60,
+    maxAge: 365 * 24 * 60 * 60, // 1 year login - no logout needed
   },
   secret: process.env.NEXTAUTH_SECRET,
   pages: { signIn: "/login" },

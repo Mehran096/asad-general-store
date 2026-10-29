@@ -17,33 +17,33 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Yasir Medical Store - Medicines | Patta Box Tablets",
-    template: "%s | Yasir Medical Store",
+    default: "Asad General Store - Mobile Accessories, Manyari, Cosmetics",
+    template: "%s | Asad General Store",
   },
   description:
-    "Yasir Medical Store - Medicines Wholesale & Retail. Patta, Box, Tablets billing, Stock alerts, Buy/Sell/Profit, Khata Udhar. Offline-ready PWA.",
-  applicationName: "Yasir Medical Store",
+    "Asad General Store - Mobile accessories, manyari, cosmetics, general items. Fast billing, stock, profit, Udhar Khata, Wusool, Easypaisa. Offline-ready PWA.",
+  applicationName: "Asad General Store",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Yasir Medical",
+    title: "Asad Store",
   },
   icons: {
     icon: [
       { url: "/logo.png", sizes: "32x32", type: "image/png" },
       { url: "/logo.png", sizes: "16x16", type: "image/png" },
-      { url: "/logo.png", sizes: "192x192", type: "image/png" },
-      { url: "/logo.png", sizes: "512x512", type: "image/png" },
+      { url: "/icon-circle-180.png", sizes: "180x180", type: "image/png" },
+      { url: "/icon-circle-512.png", sizes: "512x512", type: "image/png" },
     ],
-    apple: [{ url: "/logo.png", sizes: "180x180", type: "image/png" }],
-    shortcut: ["/logo.png"],
+    apple: [{ url: "/icon-circle-180.png", sizes: "180x180", type: "image/png" }],
+    shortcut: ["/icon-circle-180.png"],
   },
   openGraph: {
-    title: "Yasir Medical Store",
-    description: "Medicines • Patta • Box • Offline Ready",
+    title: "Asad General Store - اسد جنرل سٹور",
+    description: "Mobile Accessories • Manyari • Cosmetics • Offline Ready",
     type: "website",
-    images: ["/logo.png"],
+    images: ["/icon-circle-512.png"],
   },
 };
 
@@ -51,7 +51,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#0f766e",
+  themeColor: "#0f4fb8",
   colorScheme: "light",
 };
 

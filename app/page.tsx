@@ -55,12 +55,12 @@ export default function HomePage() {
     <div className="min-h-dvh bg-gray-50 flex flex-col">
       <div className="bg-white border-b px-3 sm:px-6 py-3 flex justify-between items-center sticky top-0 z-10">
         <div className="flex items-center gap-2">
-          <Image src="/logo.png" alt="Yasir Medical" width={28} height={28} className="w-7 h-7 rounded-full border bg-white" />
-          <h1 className="font-bold text-[14px]">💊 Yasir Medical Store</h1>
+          <Image src="/logo.png" alt="Asad General Store" width={28} height={28} className="w-7 h-7 rounded-full border bg-white" />
+          <h1 className="font-bold text-[14px]">🛒 Asad General Store</h1>
         </div>
         <div className="flex gap-2">
           {!isInstalled && (
-            <button type="button" onClick={handleInstall} className="bg-teal-600 text-white px-3.5 py-1.5 rounded-lg text-[11px] font-bold">
+            <button type="button" onClick={handleInstall} className="bg-[#0f4fb8] text-white px-3.5 py-1.5 rounded-lg text-[11px] font-bold">
               📲 Install
             </button>
           )}
@@ -73,23 +73,24 @@ export default function HomePage() {
       <div className="flex-1 p-3 sm:p-8 max-w-6xl mx-auto w-full flex flex-col justify-center">
         <div className="text-center mb-5">
           <div className="flex justify-center mb-3">
-            <Image src="/logo.png" alt="Yasir Medical" width={80} height={80} className="w-20 h-20 rounded-full border-2 border-teal-600 shadow-sm bg-white" priority />
+            <Image src="/logo.png" alt="Asad General Store" width={80} height={80} className="w-20 h-20 rounded-full border-2 border-[#0f4fb8] shadow-sm bg-white" priority />
           </div>
           <h1 className="text-[22px] sm:text-4xl font-bold leading-tight">
-            Yasir Medical
+            Asad General
             <br />
-            <span className="text-teal-600">Store Management</span>
+            <span className="text-[#0f4fb8]">Store</span>
           </h1>
-          <p className="text-gray-500 text-[12px] mt-2 font-medium">Medicines • Patta • Box • Tablets</p>
-          <p className="text-gray-400 text-[11px] mt-1">Fast billing • Patta/Box • Buy/Sell/Profit • Offline-ready</p>
+          <p className="text-gray-600 text-[12px] mt-2 font-bold">اسد جنرل سٹور</p>
+          <p className="text-gray-500 text-[12px] mt-1 font-medium">Mobile Accessories • Manyari • Cosmetics</p>
+          <p className="text-gray-400 text-[11px] mt-1">Fast billing • Stock • Profit • Udhar Khata • Offline-ready</p>
 
           {!isInstalled && (
-            <div className="mt-4 bg-teal-600 text-white p-3 rounded-xl flex justify-between items-center text-left max-w-sm mx-auto">
+            <div className="mt-4 bg-[#0f4fb8] text-white p-3 rounded-xl flex justify-between items-center text-left max-w-sm mx-auto">
               <div>
-                <p className="font-bold text-[12px]">📲 Install Yasir Medical App</p>
-                <p className="text-[10px] text-teal-100">Works offline • Fast medicine sale</p>
+                <p className="font-bold text-[12px]">📲 Install Asad Store App</p>
+                <p className="text-[10px] text-blue-100">Works offline • Fast billing</p>
               </div>
-              <button type="button" onClick={handleInstall} className="bg-white text-teal-700 px-3.5 py-1.5 rounded-lg font-bold text-[11px] ml-2 shrink-0">
+              <button type="button" onClick={handleInstall} className="bg-white text-[#0f4fb8] px-3.5 py-1.5 rounded-lg font-bold text-[11px] ml-2 shrink-0">
                 Install
               </button>
             </div>
@@ -99,21 +100,21 @@ export default function HomePage() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-5">
           <Link href="/dashboard" className="bg-white border p-3.5 rounded-[18px] shadow-sm hover:shadow-md transition">
             <p className="font-bold text-[13px] mt-1">📊 Dashboard</p>
-            <p className="text-[11px] text-gray-400 mt-1">Today sale, profit, low stock Tabs</p>
+            <p className="text-[11px] text-gray-400 mt-1">Today sale, profit, low stock</p>
           </Link>
           <Link href="/dashboard/sales" className="bg-white border p-3.5 rounded-[18px] shadow-sm hover:shadow-md transition">
-            <p className="font-bold text-[13px] mt-1">💊 Sale Point</p>
-            <p className="text-[11px] text-gray-400 mt-1">Patta / Box / Tablet fast sell</p>
+            <p className="font-bold text-[13px] mt-1">🛒 Sale Point</p>
+            <p className="text-[11px] text-gray-400 mt-1">Mobile, cosmetics, manyari fast sell</p>
           </Link>
           <Link href="/dashboard/products" className="bg-white border p-3.5 rounded-[18px] shadow-sm hover:shadow-md transition">
-            <p className="font-bold text-[13px] mt-1">💊 Medicines</p>
-            <p className="text-[11px] text-gray-400 mt-1">Stock in Tablets / Patta / Box</p>
+            <p className="font-bold text-[13px] mt-1">📦 Stock</p>
+            <p className="text-[11px] text-gray-400 mt-1">All items • Qty • Price</p>
           </Link>
         </div>
       </div>
 
       <div className="text-center pb-4 text-[10px] text-gray-400">
-        Yasir Medical Store © {new Date().getFullYear()} • Offline V9
+        Asad General Store © {new Date().getFullYear()} • اسد جنرل سٹور • Offline V1
       </div>
     </div>
   );

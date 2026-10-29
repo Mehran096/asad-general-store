@@ -71,7 +71,7 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
         }
       } catch {}
       await offlineDB.sales.put(sale);
-      await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 } as SyncQueueItem);
+      await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 });
       if (isCredit && data.customerName && data.customerName.toLowerCase() !== "walk-in") {
         const normalized = data.customerName.trim().toLowerCase();
         const existing = await offlineDB.customers.where("normalizedName").equals(normalized).first();
@@ -95,9 +95,9 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
       }
     });
   } catch (e) {
-    console.warn("saveSaleOffline transaction failed, fallback", e);
+    console.warn("saveSaleOffline fallback", e);
     await offlineDB.sales.put(sale);
-    await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 } as SyncQueueItem);
+    await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 });
   }
 
   if (typeof window !== "undefined" && "serviceWorker" in navigator) {
@@ -158,9 +158,12 @@ export async function syncOfflineSales(): Promise<{ synced: number }> {
   return { synced };
 }
 
-export async function syncAllOffline(): Promise<{ sales: number; easypaisa: number }> {
-  if (typeof window === "undefined" || !navigator.onLine) return { sales: 0, easypaisa: 0 };
+export async function syncAllOffline(): Promise<{ sales: number; easypaisa: number; wusool: number }> {
+  if (typeof window === "undefined" || !navigator.onLine) return { sales: 0, easypaisa: 0, wusool: 0 };
+  
   const salesResult = await syncOfflineSales();
+  
+  // Easypaisa
   const easy = await offlineDB.easypaisa.where("synced").equals(0).toArray();
   let easySynced = 0;
   for (const e of easy) {
@@ -180,7 +183,33 @@ export async function syncAllOffline(): Promise<{ sales: number; easypaisa: numb
       }
     } catch {}
   }
-  return { sales: salesResult.synced, easypaisa: easySynced };
+
+  // Wusool - FIX: sync wusool too
+  let wusoolSynced = 0;
+  const wusoolQueue = await offlineDB.syncQueue.where("type").equals("wusool").toArray();
+  for (const q of wusoolQueue) {
+    try {
+      const payload = q.payload as { amount: number; note?: string; date: string; customerLocalId?: string };
+      const cust = payload.customerLocalId ? await offlineDB.customers.get(payload.customerLocalId) : null;
+      const customerName = cust?.name || "";
+      if (!customerName) continue;
+      const res = await fetch("/api/customers/wusool", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName,
+          amount: payload.amount,
+          note: payload.note || "",
+          localId: q.localId,
+        }),
+      });
+      if (res.ok) {
+        await offlineDB.syncQueue.delete(q.id as number);
+        wusoolSynced++;
+      }
+    } catch {}
+  }
+
+  return { sales: salesResult.synced, easypaisa: easySynced, wusool: wusoolSynced };
 }
 
 if (typeof window !== "undefined") {
