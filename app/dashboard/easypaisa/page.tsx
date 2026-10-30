@@ -9,6 +9,7 @@ import { getOfflineUser } from "@/lib/offline-auth";
 type EasyType = "send" | "receive" | "bill" | "easyload" | "jazzcash" | "deposit" | "withdraw";
 type RecordItem = { _id: string; localId?: string; customerName: string; phone?: string; type: EasyType; amount: number; commission: number; totalAmount: number; createdAt: string };
 type EasypaisaApiResponse = { easypaisa: RecordItem[]; transactions?: RecordItem[]; totalAmount: number; totalCommission: number };
+type OfflineUser = { _id?: string; id?: string } | null;
 
 function useIsOnline(){
   const sub = useCallback((cb:()=>void)=>{ window.addEventListener("online",cb); window.addEventListener("offline",cb); return ()=>{ window.removeEventListener("online",cb); window.removeEventListener("offline",cb);};},[]);
@@ -19,6 +20,18 @@ function useIsOnline(){
 function rnd(n:number){ return Math.round(n||0); }
 
 const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+
+function formatDate(d: string){
+  const date = new Date(d);
+  return `${date.getDate()}/${date.getMonth()+1}/${date.getFullYear()}`;
+}
+function formatTime(d: string){
+  return new Date(d).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+function formatDateTime(d: string){
+  return `${formatDate(d)} ${formatTime(d)}`;
+}
+
 function isInFilter(dateStr: string, filter: string): boolean {
   if (filter === "all") return true;
   const d = new Date(dateStr);
@@ -32,6 +45,23 @@ function isInFilter(dateStr: string, filter: string): boolean {
   if (filter === "monthly") return d >= new Date(Date.UTC(y, m, 1, 0, 0, 0, 0) - PKT_OFFSET_MS) && d < endToday;
   if (filter === "yearly") return d >= new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0) - PKT_OFFSET_MS) && d < endToday;
   return true;
+}
+
+function groupByDate(list: RecordItem[]): Record<string, RecordItem[]> {
+  const groups: Record<string, RecordItem[]> = {};
+  for(const item of list){
+    const key = formatDate(item.createdAt);
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  }
+  // sort keys by latest date first
+  const sorted: Record<string, RecordItem[]> = {};
+  Object.keys(groups).sort((a,b)=>{
+    const da = new Date(groups[b][0].createdAt).getTime();
+    const db = new Date(groups[a][0].createdAt).getTime();
+    return da - db;
+  }).forEach(k=>{ sorted[k]=groups[k]; });
+  return sorted;
 }
 
 const TYPES: { id: EasyType; label: string; emoji: string; commission: number }[] = [
@@ -67,24 +97,24 @@ export default function EasypaisaPage(){
       const offlineNow = typeof window!=="undefined" && !window.navigator.onLine;
       if(offlineNow){
         const all = await offlineDB.easypaisa.orderBy("createdAt").reverse().toArray();
-        let filtered = all.filter(o => isInFilter(o.createdAt, filter));
-        if(typeFilter!=="all") filtered = filtered.filter(o=>o.type===typeFilter);
+        let filtered = all.filter((o: OfflineEasypaisa) => isInFilter(o.createdAt, filter));
+        if(typeFilter!=="all") filtered = filtered.filter((o: OfflineEasypaisa)=>o.type===typeFilter);
         if(search) {
           const s = search.toLowerCase();
-          filtered = filtered.filter(o=> o.customerName.toLowerCase().includes(s) || (o.phone||"").includes(s));
+          filtered = filtered.filter((o: OfflineEasypaisa)=> o.customerName.toLowerCase().includes(s) || (o.phone||"").includes(s));
         }
         setRecords(filtered.map((o: OfflineEasypaisa)=>({ 
           _id:o.localId, localId:o.localId, customerName:o.customerName, phone:o.phone, 
           type:o.type, amount:o.amount, commission:o.commission, 
           totalAmount:o.totalAmount, createdAt:o.createdAt 
         })));
-        setTotalAmount(rnd(filtered.reduce((a,b)=>a+b.amount,0)));
-        setTotalCommission(rnd(filtered.reduce((a,b)=>a+b.commission,0)));
+        setTotalAmount(rnd(filtered.reduce((a:number,b: OfflineEasypaisa)=>a+b.amount,0)));
+        setTotalCommission(rnd(filtered.reduce((a:number,b: OfflineEasypaisa)=>a+b.commission,0)));
         setPendingCount(await offlineDB.easypaisa.where("synced").equals(0).count());
       } else {
-        try { await syncAllOffline(); } catch {}
-        const res = await fetch(`/api/easypaisa?filter=${filter}&type=${typeFilter}&search=${encodeURIComponent(search)}&limit=50`);
-        const data = (await res.json()) as EasypaisaApiResponse;
+        try { await syncAllOffline(); } catch { /* ignore */ }
+        const res = await fetch(`/api/easypaisa?filter=${filter}&type=${typeFilter}&search=${encodeURIComponent(search)}&limit=100`);
+        const data = await res.json() as EasypaisaApiResponse;
         const list = data.easypaisa || data.transactions || [];
         setRecords(list);
         setTotalAmount(rnd(data.totalAmount||0));
@@ -109,6 +139,8 @@ export default function EasypaisaPage(){
     return map;
   },[records]);
 
+  const grouped = useMemo(()=> groupByDate(records), [records]);
+
   const onTypeSelect = (t: typeof TYPES[number]) => {
     setSelectedType(t.id);
     setCommission(t.commission.toString());
@@ -119,22 +151,22 @@ export default function EasypaisaPage(){
     if(!amount){ alert("Amount required"); return; }
     const amt = rnd(Number(amount));
     const comm = rnd(Number(commission||0));
-    const offlineUser = getOfflineUser() as { _id?: string; id?: string } | null;
+    const offlineUser = getOfflineUser() as OfflineUser;
     const userId = offlineUser?._id || offlineUser?.id || "offline";
     const now = new Date().toISOString();
     const localId = `easy_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
 
     const newItem: RecordItem = { _id:localId, localId, customerName: customerName||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, totalAmount:amt+comm, createdAt:now };
-    setRecords(prev=>[newItem, ...prev]);
-    setTotalAmount(t=>rnd(t+amt));
-    setTotalCommission(t=>rnd(t+comm));
+    setRecords((prev)=>[newItem, ...prev]);
+    setTotalAmount((t)=>rnd(t+amt));
+    setTotalCommission((t)=>rnd(t+comm));
     const nameToSave = customerName;
     setCustomerName(""); setPhone(""); setAmount(""); setCommission("");
 
     let savedId = localId;
     try {
       savedId = await saveEasypaisaOffline({ customerName: nameToSave||"Walk-in", phone, type:selectedType, amount:amt, commission:comm, userId, localId });
-    } catch {}
+    } catch { /* ignore */ }
 
     if(typeof window!=="undefined" && window.navigator.onLine){
       try{
@@ -143,13 +175,13 @@ export default function EasypaisaPage(){
           await offlineDB.easypaisa.update(savedId, { synced: 1 });
           await offlineDB.syncQueue.where("localId").equals(savedId).delete();
         }
-      }catch{}
+      }catch{ /* ignore */ }
     }
   };
 
   const onDelete = async(id:string)=>{
     if(!confirm("Delete?")) return;
-    setRecords(prev=>prev.filter(r=>r._id!==id));
+    setRecords((prev)=>prev.filter((r)=>r._id!==id));
     try{
       if(id.startsWith("easy_")){
         await offlineDB.easypaisa.where("localId").equals(id).delete();
@@ -177,15 +209,15 @@ export default function EasypaisaPage(){
             <p className="font-bold text-[13px] mb-3">+ New Transaction</p>
             <form onSubmit={onSubmit} className="space-y-2">
               <div className="grid grid-cols-4 gap-1.5 mb-2">
-                {TYPES.map(t=>(
+                {TYPES.map((t)=>(
                   <button key={t.id} type="button" onClick={()=>onTypeSelect(t)} className={`p-2 rounded-xl border text-[10px] font-bold ${selectedType===t.id?"bg-black text-white":"bg-gray-50"}`}>{t.emoji}<br/>{t.label}</button>
                 ))}
               </div>
-              <input value={customerName} onChange={e=>setCustomerName(e.target.value)} placeholder="Customer name (Walk-in)" className="w-full border p-2.5 rounded-xl text-[12px]" />
-              <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Phone 03XX..." className="w-full border p-2.5 rounded-xl text-[12px]" />
+              <input value={customerName} onChange={(e)=>setCustomerName(e.target.value)} placeholder="Customer name (Walk-in)" className="w-full border p-2.5 rounded-xl text-[12px]" />
+              <input value={phone} onChange={(e)=>setPhone(e.target.value)} placeholder="Phone 03XX..." className="w-full border p-2.5 rounded-xl text-[12px]" />
               <div className="grid grid-cols-2 gap-2">
-                <input value={amount} onChange={e=>setAmount(e.target.value)} type="number" placeholder="Amount Rs." className="border p-2.5 rounded-xl text-[12px]" />
-                <input value={commission} onChange={e=>setCommission(e.target.value)} type="number" placeholder="Commission Rs." className="border p-2.5 rounded-xl text-[12px] bg-yellow-50 font-bold" />
+                <input value={amount} onChange={(e)=>setAmount(e.target.value)} type="number" placeholder="Amount Rs." className="border p-2.5 rounded-xl text-[12px]" />
+                <input value={commission} onChange={(e)=>setCommission(e.target.value)} type="number" placeholder="Commission Rs." className="border p-2.5 rounded-xl text-[12px] bg-yellow-50 font-bold" />
               </div>
               <button type="submit" className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px]">Add Rs.{amount||0} + Com {commission||0} = Rs.{rnd(Number(amount||0)+Number(commission||0))}</button>
             </form>
@@ -198,7 +230,7 @@ export default function EasypaisaPage(){
           <div className="bg-white border rounded-xl p-3">
             <p className="font-bold text-[11px] mb-2">📊 Breakdown — {filter} {typeFilter!=="all"? `• ${typeFilter}`:""}</p>
             <div className="grid grid-cols-2 gap-1.5">
-              {TYPES.map(t=>{
+              {TYPES.map((t)=>{
                 const b = breakdown[t.id];
                 if(!b || b.count===0) return (
                   <div key={t.id} className="border bg-gray-50 rounded-lg p-2 text-[10px] opacity-60">
@@ -223,17 +255,27 @@ export default function EasypaisaPage(){
 
         <div className="lg:col-span-2 space-y-2">
           <div className="bg-white border rounded-xl p-2 flex flex-wrap gap-1.5">
-            {["today","weekly","monthly","all"].map(f=><button key={f} onClick={()=>setFilter(f)} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-black text-white":"bg-gray-100"}`}>{f}</button>)}
-            <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)} className="border rounded-full px-2 py-1 text-[10px] ml-auto"><option value="all">All Types</option>{TYPES.map(t=><option key={t.id} value={t.id}>{t.label}</option>)}</select>
+            {["today","weekly","monthly","all"].map((f)=><button key={f} onClick={()=>setFilter(f)} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-black text-white":"bg-gray-100"}`}>{f}</button>)}
+            <select value={typeFilter} onChange={(e)=>setTypeFilter(e.target.value)} className="border rounded-full px-2 py-1 text-[10px] ml-auto"><option value="all">All Types</option>{TYPES.map((t)=><option key={t.id} value={t.id}>{t.label}</option>)}</select>
           </div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search name / phone..." className="w-full border p-2.5 rounded-xl bg-white text-[12px]" />
+          <input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="🔍 Search name / phone..." className="w-full border p-2.5 rounded-xl bg-white text-[12px]" />
           {loading? <p className="text-center py-10 text-[12px]">Loading...</p> :
-          <div className="space-y-1.5">
+          <div className="space-y-3">
             {records.length===0? <p className="text-center py-8 text-[11px] text-gray-400">No transactions — {filter}</p> :
-            records.map(r=>(
-              <div key={r._id} className="bg-white border rounded-xl p-2.5 flex justify-between text-[11px]">
-                <div><b>{r.customerName}</b> {r.phone? `• ${r.phone}`:""} <span className="bg-gray-100 px-2 py-0.5 rounded-full text-[9px] ml-1">{r.type}</span><div className="text-[9px] text-gray-400">{new Date(r.createdAt).toLocaleTimeString()} • Amount {r.amount} + Com {r.commission}</div></div>
-                <div className="text-right flex gap-2 items-center"><span className="font-bold">Rs.{r.totalAmount} <span className="text-green-600 text-[9px]">+{r.commission}</span></span><button onClick={()=>onDelete(r._id)} className="text-red-500">✕</button></div>
+            Object.entries(grouped).map(([date, items])=>(
+              <div key={date} className="space-y-1.5">
+                <div className="sticky top-0 z-10 bg-gray-100 border rounded-lg px-3 py-1.5 flex justify-between text-[11px] font-bold">
+                  <span>📅 {date}</span><span className="bg-black text-white px-2 rounded-full text-[9px]">{items.length} Tx • Rs.{items.reduce((a,b)=>a+b.amount,0)} + Com {items.reduce((a,b)=>a+b.commission,0)}</span>
+                </div>
+                {items.map((r)=>(
+                  <div key={r._id} className="bg-white border rounded-xl p-2.5 flex justify-between text-[11px]">
+                    <div>
+                      <b>{r.customerName}</b> {r.phone? `• ${r.phone}`:""} <span className="bg-gray-100 px-2 py-0.5 rounded-full text-[9px] ml-1">{r.type}</span>
+                      <div className="text-[9px] text-gray-500">{formatDateTime(r.createdAt)} • Amt {r.amount} + Com {r.commission}</div>
+                    </div>
+                    <div className="text-right flex gap-2 items-center"><span className="font-bold">Rs.{r.totalAmount} <span className="text-green-600 text-[9px]">+{r.commission}</span></span><button onClick={()=>onDelete(r._id)} className="text-red-500">✕</button></div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>}
